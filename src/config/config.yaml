@@ -1,0 +1,42 @@
+data:
+  root_dir: 'G:\datasets3D\data3d\nodule_patches96_1_4'  # 使用单引号
+  transform: "3d"
+  num_classes: 2
+
+model:
+  name: "ViT3D"
+  params:
+    image_size: 96  # 96 * 96 * 96
+    patch_size: 16
+    dim: 768
+    depth: 12
+    heads: 12
+    mlp_dim: 256   # 第二层
+    pretrained: "vit_base_patch16_224"
+
+training:
+  device: "cuda"
+  random_seed: 42
+  num_epochs: 40
+  batch_size: 8
+  num_workers: 4
+  loss:
+    smoothing: 0.05
+    class_weights: "auto"
+
+optimizer:
+  name: "AdamW"
+  params:
+    lr: 2e-5
+    weight_decay: 0.01
+
+scheduler:
+  name: "CosineAnnealingWarmRestarts"
+  params:
+    T_0: 10
+    T_mult: 2
+    eta_min: 1e-7
+
+cross_validation:
+  n_splits: 5
+  shuffle: true
