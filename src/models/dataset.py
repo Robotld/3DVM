@@ -6,22 +6,34 @@ from torch.utils.data import Dataset
 
 
 class NoduleDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
+    def __init__(self, root_dirs, transform=None):
+        """
+        初始化数据集
+
+        参数:
+            root_dirs: 字符串列表，包含所有数据集路径，或者单个字符串路径
+            transform: 数据转换操作
+        """
         self.transform = transform
         self.samples = []
 
-        # 遍历文件夹获取所有样本
-        for class_folder in os.listdir(root_dir):
-            class_path = os.path.join(root_dir, class_folder)
-            if os.path.isdir(class_path):
-                class_label = int(class_folder)
-                for file_name in os.listdir(class_path):
-                    if file_name.endswith(('.nii', '.nii.gz')):
-                        self.samples.append((
-                            os.path.join(class_path, file_name),
-                            class_label
-                        ))
+        # 如果传入的是单个路径，转为列表处理
+        if isinstance(root_dirs, str):
+            root_dirs = [root_dirs]
+
+        # 遍历每个数据集路径
+        for root_dir in root_dirs:
+            # 遍历文件夹获取所有样本
+            for class_folder in os.listdir(root_dir):
+                class_path = os.path.join(root_dir, class_folder)
+                if os.path.isdir(class_path):
+                    class_label = int(class_folder)
+                    for file_name in os.listdir(class_path):
+                        if file_name.endswith(('.nii', '.nii.gz')):
+                            self.samples.append((
+                                os.path.join(class_path, file_name),
+                                class_label
+                            ))
 
     def __len__(self):
         return len(self.samples)
