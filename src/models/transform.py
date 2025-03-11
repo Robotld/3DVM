@@ -1,6 +1,6 @@
 import numpy as np
 from monai.transforms import (
-    Compose, LoadImaged, EnsureChannelFirstd, Orientationd,
+    Compose, LoadImaged, Orientationd,
     CenterSpatialCropd, SpatialPadd, NormalizeIntensityd, ToTensord,
     RandRotate90d, RandAffined, RandGaussianSmoothd, RandScaleIntensityd,
     RandShiftIntensityd, RandGaussianNoised
@@ -18,9 +18,8 @@ def create_transforms(config, args):
     # 解析中心裁剪尺寸
     if args.center_crop:
         try:
-            crop_size = tuple(map(int, args.center_crop.split('x')))
-            if len(crop_size) == 1:
-                crop_size = (crop_size[0], crop_size[0], crop_size[0])
+            if isinstance(args.center_crop, int):
+                crop_size = (args.center_crop, args.center_crop, args.center_crop)
             else:
                 crop_size = (image_size, image_size, image_size)
         except:
@@ -54,10 +53,10 @@ def create_transforms(config, args):
                 mode="bilinear",
                 padding_mode="zeros"
             ),
-            RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
+            # RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
             RandScaleIntensityd(keys=["image"], prob=0.3, factors=0.1),
             RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),
-            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
+            # RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
         ]
 
     # 3. 剩余的标准处理 - 所有数据都需要的步骤

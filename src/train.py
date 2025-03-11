@@ -15,14 +15,14 @@ from sklearn.metrics import f1_score, accuracy_score, roc_auc_score
 from torch import optim
 from tqdm import tqdm
 
-from models.losses import LabelSmoothingCrossEntropy
-from models.lr_scheduler import WarmupScheduler
+from models import WarmupScheduler
 # 导入自定义模块
-from models.transform import create_transforms
-from src.models.CrossVakudator import CrossValidator
-from src.models.ViT_3D import ViT3D
-from src.models.dataset import NoduleDataset
-
+from models import create_transforms
+from models import CrossValidator
+from models import ViT3D
+from models import NoduleDataset
+from models import FocalLoss
+import os
 
 class ConfigManager:
     def __init__(self, config_path):
@@ -105,8 +105,7 @@ def train_model(model, train_loader, val_loader, config, fold, device,
     #     class_weights=class_weights
     # )
 
-    loss_fn = torch.nn.CrossEntropyLoss()
-
+    loss_fn = FocalLoss()
 
     # 初始化混合精度训练
     scaler = amp.GradScaler()
@@ -136,7 +135,6 @@ def train_model(model, train_loader, val_loader, config, fold, device,
 
         # 使用tqdm显示进度条
         for x, y in tqdm(train_loader, desc=f"Epoch {epoch+1} 训练", leave=False):
-            # print(x, y)
             x, y = x.to(device), y.to(device)
 
             optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
@@ -151,8 +149,8 @@ def train_model(model, train_loader, val_loader, config, fold, device,
                 scaler.scale(loss).backward()
 
                 # 实施梯度裁剪
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+                # scaler.unscale_(optimizer)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
 
                 scaler.step(optimizer)
                 scaler.update()
@@ -293,6 +291,10 @@ def parse_args(config):
                         help='3D input image size')
     parser.add_argument('--num_classes', type=int, default=config.data['num_classes'],
                         help='num_classes')
+    parser.add_argument('--pretrained_path', type=str, default=config.training['pretrained_path'],
+                        help='pretrained_path')
+    parser.add_argument('--lr', type=float, default=config.optimizer['params']['lr'],
+                        help='pretrained_path')
     return parser.parse_args()
 
 def main():
@@ -354,9 +356,6 @@ def main():
         "center_crop": config.training["center_crop"]
     }
 
-    # 预加载预训练路径
-    pretrained_path = r"E:\ultralytics\facebookdinov2-with-registers-small-imagenet1k-1-layer"
-
     # 进行交叉验证
     for fold, train_loader, val_loader, train_counter in cv.get_folds(train_transforms, val_transforms):
         # 记录每个fold的数据计数器，用于计算类别权重
@@ -379,10 +378,10 @@ def main():
         print(f"可训练参数量: {trainable_params:,}")
 
         # 加载预训练权重
-        if pretrained_path:
-            print(f"Loading pretrained weights from {pretrained_path}...")
+        if args.pretrained_path:
+            print(f"Loading pretrained weights from {args.pretrained_path}...")
             try:
-                model.load_pretrained_dino(pretrained_path)
+                model.load_pretrained_dino(args.pretrained_path)
             except Exception as e:
                 print(f"加载预训练权重出错: {str(e)}")
 
