@@ -1,22 +1,25 @@
 data:
+  num_classes: 2
   root_dirs:
     - 'G:\datasets3D\nodule_patches96_1'
     - 'G:\datasets3D\nodule_patches96_2'
     - 'G:\datasets3D\nodule_patches96_3'
+    - 'G:\datasets3D\nodule_patches96_4'
 
 model:
   params:
-    image_size: [96, 96, 96]
+    image_size: 96 # 96 * 96 * 96
     patch_size: 16
     dim: 768
     depth: 12
     heads: 12
-    mlp_dim: 3072
+    mlp_dim: 512
+    pool: 'max' # mean max all
 
 training:
   device: "cuda"
   random_seed: 42
-  batch_size: 16
+  batch_size: 32
   num_epochs: 50
   num_workers: 4
   use_amp: True
@@ -24,24 +27,24 @@ training:
   warmup_epochs: 3
   warmup_type: "linear"
   max_grad_norm: 1.0
-  center_crop: "64x64x64"
+  center_crop: null
   augment: True
   loss:
     smoothing: 0.1
     class_weights: "auto"
 
 cross_validation:
-  n_splits: 5
+  n_splits: 10
   shuffle: true
 
 optimizer:
   name: "AdamW"
   params:
-    lr: 3e-4
+    lr: 1e-5
     weight_decay: 0.01
 
 scheduler:
   name: "CosineAnnealingLR"
   params:
     T_max: 50
-    eta_min: 1e-6
+    eta_min: 1e-7

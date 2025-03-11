@@ -5,25 +5,23 @@
 
 import argparse
 import time
-import numpy as np
-from ruamel.yaml import YAML
 from collections import Counter
 
-from sklearn.metrics import f1_score, accuracy_score, roc_auc_score
-from sklearn.model_selection import StratifiedKFold
+import numpy as np
 import torch
-from torch import optim
-from torch.utils.data import Subset, DataLoader
 import torch.cuda.amp as amp  # 添加混合精度训练
+from ruamel.yaml import YAML
+from sklearn.metrics import f1_score, accuracy_score, roc_auc_score
+from torch import optim
+from tqdm import tqdm
 
 from models.losses import LabelSmoothingCrossEntropy
-from src.models.ViT_3D import ViT3D
-from src.models.dataset import NoduleDataset
-
-
+from models.lr_scheduler import WarmupScheduler
 # 导入自定义模块
 from models.transform import create_transforms
-from models.lr_scheduler import WarmupScheduler
+from src.models.CrossVakudator import CrossValidator
+from src.models.ViT_3D import ViT3D
+from src.models.dataset import NoduleDataset
 
 
 class ConfigManager:
@@ -50,87 +48,6 @@ class ConfigManager:
     def get_scheduler_params(self):
         return self.scheduler["params"]
 
-
-class CrossValidator:
-    def __init__(self, dataset, config):
-        self.dataset = dataset
-        self.config = config.cross_validation
-        self.train_config = config.training
-
-        # 获取所有标签用于分层采样 - 使用缓存优化
-        self.all_labels = np.array([label for _, label in dataset])
-
-        # 使用Counter更快统计
-        label_counter = Counter(self.all_labels)
-        total_samples = len(self.all_labels)
-
-        print("\n------- 数据集类别分布 -------")
-        for label, count in sorted(label_counter.items()):
-            percentage = count / total_samples * 100
-            print(f"类别 {label}: {count} 个样本 ({percentage:.2f}%)")
-        print("----------------------------\n")
-
-        # 初始化分层K折交叉验证器
-        self.skf = StratifiedKFold(
-            n_splits=self.config["n_splits"],
-            shuffle=self.config["shuffle"],
-            random_state=self.train_config["random_seed"]
-        )
-
-    def get_folds(self):
-        # 预计算所有fold，避免重复计算
-        all_splits = list(self.skf.split(np.zeros(len(self.all_labels)), self.all_labels))
-
-        for fold, (train_idx, val_idx) in enumerate(all_splits):
-            # 创建训练集和验证集的子集
-            train_subset = Subset(self.dataset, train_idx)
-            val_subset = Subset(self.dataset, val_idx)
-
-            # 高效获取标签
-            train_labels = self.all_labels[train_idx]
-            val_labels = self.all_labels[val_idx]
-
-            # 使用Counter高效统计
-            train_counter = Counter(train_labels)
-            val_counter = Counter(val_labels)
-
-            total_train = len(train_labels)
-            total_val = len(val_labels)
-
-            print(f"\n------- 第 {fold + 1} 折的类别分布 -------")
-            print("训练集:")
-            for label, count in sorted(train_counter.items()):
-                percentage = count / total_train * 100
-                print(f"  类别 {label}: {count} 个样本 ({percentage:.2f}%)")
-
-            print("验证集:")
-            for label, count in sorted(val_counter.items()):
-                percentage = count / total_val * 100
-                print(f"  类别 {label}: {count} 个样本 ({percentage:.2f}%)")
-            print("-----------------------------------\n")
-
-            # 使用pin_memory和persistent_workers加速数据加载
-            train_loader = DataLoader(
-                train_subset,
-                batch_size=self.train_config["batch_size"],
-                shuffle=True,
-                num_workers=self.train_config["num_workers"],
-                pin_memory=True,
-                persistent_workers=True if self.train_config["num_workers"] > 0 else False
-            )
-
-            val_loader = DataLoader(
-                val_subset,
-                batch_size=self.train_config["batch_size"] * 2,  # 验证时可用更大的batch size
-                shuffle=False,
-                num_workers=self.train_config["num_workers"],
-                pin_memory=True,
-                persistent_workers=True if self.train_config["num_workers"] > 0 else False
-            )
-
-            yield fold, train_loader, val_loader
-
-
 def train_model(model, train_loader, val_loader, config, fold, device,
                 warmup_epochs=3, warmup_type='linear', max_grad_norm=1.0):
     """训练单个折的模型，添加学习率预热和梯度裁剪"""
@@ -155,45 +72,57 @@ def train_model(model, train_loader, val_loader, config, fold, device,
     print(f"启用学习率预热: {warmup_epochs} 个epoch, 类型: {warmup_type}")
     print(f"启用梯度裁剪，最大范数: {max_grad_norm}")
 
-    # 使用缓存获取标签，避免遍历
-    labels = np.array([y for _, y in train_loader.dataset])
-
-    # 使用Counter高效统计
-    label_counter = Counter(labels)
-    max_label = max(label_counter.keys()) if label_counter else 0
-    class_counts = [label_counter.get(i, 0) for i in range(max_label + 1)]
-
     # 打印训练集中每个类的数量
     print(f"\n------- 第 {fold + 1} 折训练集类别数量 -------")
-    for cls, count in enumerate(class_counts):
-        if count > 0:  # 只显示非0类
-            print(f"类别 {cls}: {count} 个样本")
+    for cls, count in train_loader.dataset._data_counter.items() if hasattr(train_loader.dataset, '_data_counter') else []:
+        print(f"类别 {cls}: {count} 个样本")
     print("-----------------------------------\n")
 
-    # 初始化损失函数
-    if config.training["loss"]["class_weights"] == "auto":
-        class_weights = np.array([1.0 / (count if count > 0 else 1) for count in class_counts])
-        class_weights = class_weights / class_weights.sum() * len(class_weights)
-        class_weights = torch.FloatTensor(class_weights).to(device)
-    else:
-        class_weights = None
+    # # 初始化损失函数
+    # if config.training["loss"]["class_weights"] == "auto":
+    #     # 从数据集中获取类别分布
+    #     if hasattr(train_loader.dataset, '_data_counter'):
+    #         class_counter = train_loader.dataset._data_counter
+    #     else:
+    #         # 统计训练集中的标签分布
+    #         class_counter = Counter()
+    #         for batch in train_loader:
+    #             _, labels = batch
+    #             class_counter.update(labels.cpu().numpy())
+    #
+    #     # 计算类别权重
+    #     classes = sorted(class_counter.keys())
+    #     class_counts = [class_counter[cls] for cls in classes]
+    #     class_weights = np.array([1.0 / (count if count > 0 else 1) for count in class_counts])
+    #     class_weights = class_weights / class_weights.sum() * len(class_weights)
+    #     class_weights = torch.FloatTensor(class_weights).to(device)
+    # else:
+    #     class_weights = None
+    #
+    # print(f"类别权重: {class_weights}")
+    # loss_fn = LabelSmoothingCrossEntropy(
+    #     smoothing=config.training["loss"]["smoothing"],
+    #     class_weights=class_weights
+    # )
 
-    print(f"类别权重: {class_weights}")
-    loss_fn = LabelSmoothingCrossEntropy(
-        smoothing=config.training["loss"]["smoothing"],
-        class_weights=class_weights
-    )
+    loss_fn = torch.nn.CrossEntropyLoss()
+
 
     # 初始化混合精度训练
     scaler = amp.GradScaler()
-    use_amp = device.type == 'cuda'  # 只在GPU上使用自动混合精度
+    use_amp = device.type == 'cuda' and config.training["use_amp"]
+    if use_amp:
+        print("启用混合精度训练")
 
     best_val_f1 = 0
     best_model_path = f'best_model_fold_{fold}.pth'
 
-    # 缓存验证集，优化评估过程
+
+
+    #缓存验证集，优化评估过程
+    print("缓存验证数据到GPU内存以加速评估...")
     val_data_cached = []
-    for x, y in val_loader:
+    for x, y in tqdm(val_loader, desc="缓存验证数据"):
         val_data_cached.append((x.to(device), y.to(device)))
 
     for epoch in range(config.training["num_epochs"]):
@@ -205,7 +134,9 @@ def train_model(model, train_loader, val_loader, config, fold, device,
         train_correct = 0
         train_total = 0
 
-        for x, y in train_loader:
+        # 使用tqdm显示进度条
+        for x, y in tqdm(train_loader, desc=f"Epoch {epoch+1} 训练", leave=False):
+            # print(x, y)
             x, y = x.to(device), y.to(device)
 
             optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
@@ -248,7 +179,7 @@ def train_model(model, train_loader, val_loader, config, fold, device,
         val_probs = []
 
         with torch.no_grad():
-            for x, y in val_data_cached:  # 使用缓存的验证数据
+            for x, y in tqdm(val_data_cached, desc=f"Epoch {epoch+1} 验证", leave=False):  # 使用缓存的验证数据
                 if use_amp:
                     with amp.autocast():
                         outputs = model(x)
@@ -277,7 +208,9 @@ def train_model(model, train_loader, val_loader, config, fold, device,
         val_acc = accuracy_score(val_labels_np, val_preds_np)
         val_f1 = f1_score(val_labels_np, val_preds_np, average='macro')
 
-        if len(class_counts) > 2:
+        # 处理AUC计算 - 根据类别数量自适应
+        num_classes = len(np.unique(val_labels_np))
+        if num_classes > 2:
             # 多分类
             val_auc = roc_auc_score(val_labels_np, val_probs_np, multi_class="ovr", average="macro")
         else:
@@ -293,7 +226,7 @@ def train_model(model, train_loader, val_loader, config, fold, device,
         for cls in unique_classes:
             mask = (val_labels_np == cls)
             correct = np.sum((val_preds_np == cls) & mask)
-            per_class_accuracy[cls] = correct / np.sum(mask)
+            per_class_accuracy[cls] = correct / np.sum(mask) if np.sum(mask) > 0 else 0
 
         # 将每个类的准确率压缩到一行字符串输出
         per_class_str = ", ".join([f"Class {cls}: {acc:.4f}" for cls, acc in per_class_accuracy.items()])
@@ -303,15 +236,21 @@ def train_model(model, train_loader, val_loader, config, fold, device,
             best_val_f1 = val_f1
             # 使用torch.save的_use_new_zipfile_serialization=True选项加快保存速度
             torch.save(model.state_dict(), best_model_path, _use_new_zipfile_serialization=True)
+            print(f"保存新的最佳模型，F1: {val_f1:.4f}")
 
         # 计算当前学习率
         current_lr = optimizer.param_groups[0]['lr']
+
+        # 打印预热信息
+        if epoch == warmup_epochs - 1:
+            print("预热阶段结束，切换到基础学习率调度器")
 
         # 计算每轮训练时间
         epoch_time = time.time() - start_time
 
         # 打印进度和指标
-        print(f'Fold {fold + 1}, Epoch {epoch + 1}/{config.training["num_epochs"]} - 耗时: {epoch_time:.2f}s, LR: {current_lr:.6f}')
+        print(
+            f'Fold {fold + 1}, Epoch {epoch + 1}/{config.training["num_epochs"]} - 耗时: {epoch_time:.2f}s, LR: {current_lr:.6f}')
         print(f'Train Loss: {train_loss / len(train_loader):.4f}, '
               f'Train Acc: {train_correct / train_total:.4f}')
         print(f'Val Loss: {val_loss / len(val_data_cached):.4f}, '
@@ -320,16 +259,16 @@ def train_model(model, train_loader, val_loader, config, fold, device,
               f'Val AUC: {val_auc:.4f}')
         print(f'Per Class Accuracies: {per_class_str}')
 
+        # 更新学习率调度器
         scheduler.step()
 
     return best_val_f1
-
 
 def parse_args(config):
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='config/config.yaml',
                         help='Path to config file')
-    parser.add_argument('--data_dir', type=str, default=config.data["root_dirs"][0],
+    parser.add_argument('--data_dir', type=str, nargs='+', default=config.data["root_dirs"],
                         help='Override data directory in config')
     parser.add_argument('--batch_size', type=int, default=config.training["batch_size"],
                         help='Override batch size in config')
@@ -337,9 +276,12 @@ def parse_args(config):
                         help='Use automatic mixed precision training')
     parser.add_argument('--cache_dataset', action='store_true', default=config.training["cache_dataset"],
                         help='Cache entire dataset in memory (speeds up training but uses more RAM)')
+    parser.add_argument('--cache_dir', type=str, default=None,
+                        help='Directory for caching dataset on disk (using PersistentDataset)')
     parser.add_argument('--warmup_epochs', type=int, default=config.training["warmup_epochs"],
                         help='Number of warmup epochs')
-    parser.add_argument('--warmup_type', type=str, default=config.training["warmup_type"], choices=['linear', 'exponential'],
+    parser.add_argument('--warmup_type', type=str, default=config.training["warmup_type"],
+                        choices=['linear', 'exponential'],
                         help='Type of learning rate warmup')
     parser.add_argument('--max_grad_norm', type=float, default=config.training["max_grad_norm"],
                         help='Maximum gradient norm for clipping')
@@ -347,8 +289,11 @@ def parse_args(config):
                         help='Apply center cropping with size format "DxHxW", e.g. "64x64x64"')
     parser.add_argument('--augment', action='store_true', default=config.training["augment"],
                         help='Apply medical image augmentation')
+    parser.add_argument('--image_size', type=int, default=config.model['params']["image_size"],
+                        help='3D input image size')
+    parser.add_argument('--num_classes', type=int, default=config.data['num_classes'],
+                        help='num_classes')
     return parser.parse_args()
-
 
 def main():
     # 记录开始时间
@@ -375,54 +320,48 @@ def main():
         torch.cuda.empty_cache()
 
     print(f"使用设备: {config.training['device']}")
+    print(f"缓存数据集: {args.cache_dataset}")
+    if args.cache_dir:
+        print(f"使用磁盘缓存目录: {args.cache_dir}")
 
     # 创建MONAI转换管道
     train_transforms, val_transforms = create_transforms(config, args)
 
-    # 加载数据集
+    # 创建数据集
     print("加载数据集...")
-    dataset = NoduleDataset(
-        root_dirs=[args.data_dir],
-        transform=train_transforms  # 使用MONAI转换
-    )
+    dataset = NoduleDataset(args.data_dir, transform=None)
 
-    # 如果启用了缓存，将整个数据集加载到内存
-    if args.cache_dataset:
-        print("缓存数据集到内存...")
-        # 这里可以添加数据集缓存逻辑，但需要修改NoduleDataset类
+    # 显示数据集基本信息
+    print(f"数据集样本总数: {len(dataset.samples)}")
 
-    # 使用高效的方式生成标签列表
-    all_labels = np.array([label for _, label in dataset])
-    label_counter = Counter(all_labels)
-
-    print("\n------- 数据集总体类别分布 -------")
-    for cls, count in sorted(label_counter.items()):
-        percentage = count / len(all_labels) * 100
-        print(f"类别 {cls}: {count} 个样本 ({percentage:.2f}%)")
-    print("-----------------------------------\n")
-
-    # 初始化交叉验证器
+    # 初始化交叉验证器，传入缓存目录
     cv = CrossValidator(dataset, config)
     device = config.training['device']
+
     # 存储每折的最佳F1分数
     fold_scores = []
 
     # 预加载模型配置，避免在循环中重复访问
     model_config = {
         "num_classes": config.data["num_classes"],
-        "image_size": config.model["params"]["image_size"],
+        "image_size": args.image_size,
         "patch_size": config.model["params"]["patch_size"],
         "dim": config.model["params"]["dim"],
         "depth": config.model["params"]["depth"],
         "heads": config.model["params"]["heads"],
         "mlp_dim": config.model["params"]["mlp_dim"],
+        "pool": config.model["params"]["pool"],
+        "center_crop": config.training["center_crop"]
     }
 
     # 预加载预训练路径
-    pretrained_path = r"E:\ultralytics\facebookdinov2-with-registers-small-imagenet1k"
+    pretrained_path = r"E:\ultralytics\facebookdinov2-with-registers-small-imagenet1k-1-layer"
 
     # 进行交叉验证
-    for fold, train_loader, val_loader in cv.get_folds():
+    for fold, train_loader, val_loader, train_counter in cv.get_folds(train_transforms, val_transforms):
+        # 记录每个fold的数据计数器，用于计算类别权重
+        train_loader.dataset._data_counter = train_counter
+
         # 清理GPU内存
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -433,9 +372,19 @@ def main():
         # 初始化新的模型
         model = ViT3D(**model_config).to(device)
 
+        # 打印模型结构
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"模型总参数量: {total_params:,}")
+        print(f"可训练参数量: {trainable_params:,}")
+
         # 加载预训练权重
-        print(f"Loading pretrained weights from {pretrained_path}...")
-        model.load_pretrained_dino(model, pretrained_path)
+        if pretrained_path:
+            print(f"Loading pretrained weights from {pretrained_path}...")
+            try:
+                model.load_pretrained_dino(pretrained_path)
+            except Exception as e:
+                print(f"加载预训练权重出错: {str(e)}")
 
         # 训练模型
         best_f1 = train_model(
@@ -447,7 +396,7 @@ def main():
             fold=fold,
             warmup_epochs=args.warmup_epochs,
             warmup_type=args.warmup_type,
-            max_grad_norm=args.max_grad_norm
+            max_grad_norm=args.max_grad_norm,
         )
 
         fold_scores.append(best_f1)
@@ -472,7 +421,6 @@ def main():
     hours, remainder = divmod(total_time, 3600)
     minutes, seconds = divmod(remainder, 60)
     print(f"\n总运行时间: {int(hours)}小时 {int(minutes)}分钟 {seconds:.2f}秒")
-
 
 if __name__ == '__main__':
     main()
