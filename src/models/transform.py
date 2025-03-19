@@ -16,10 +16,10 @@ def create_transforms(config, args):
     image_size = config.model["params"]["image_size"]
 
     # 解析中心裁剪尺寸
-    if args.center_crop:
+    if args.crop_size:
         try:
-            if isinstance(args.center_crop, int):
-                crop_size = (args.center_crop, args.center_crop, args.center_crop)
+            if isinstance(args.crop_size, int):
+                crop_size = (args.crop_size, args.crop_size, args.crop_size)
             else:
                 crop_size = (image_size, image_size, image_size)
         except:
@@ -43,16 +43,16 @@ def create_transforms(config, args):
         print("启用数据增强...")
         augment_transforms = [
             # 2. 增强变换 - 应用在加载后但归一化前
-            RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(0, 1)),
-            RandAffined(
-                keys=["image"],
-                prob=0.5,
-                rotate_range=(np.pi / 20, np.pi / 20, np.pi / 20),
-                scale_range=(0.1, 0.1, 0.1),
-                translate_range=(10, 10, 10),
-                mode="bilinear",
-                padding_mode="zeros"
-            ),
+            # RandRotate90d(keys=["image"], prob=0.3, spatial_axes=(0, 1)),
+            # RandAffined(
+            #     keys=["image"],
+            #     prob=0.1,
+            #     rotate_range=(np.pi / 20, np.pi / 20, np.pi / 20),
+            #     scale_range=(0.1, 0.1, 0.1),
+            #     translate_range=(5, 5, 5),
+            #     mode="bilinear",
+            #     padding_mode="zeros"
+            # ),
             # RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
             RandScaleIntensityd(keys=["image"], prob=0.3, factors=0.1),
             RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),

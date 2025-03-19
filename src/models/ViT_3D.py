@@ -19,9 +19,8 @@ class ViT3D(VisionTransformer):
                  patch_size=16,
                  image_size=96,
                  in_chans=1,
-                 pool='mean',
-                 center_crop=64,
-                 use_3d_pos_embed=True):
+                 pool='max',
+                 use_3d_pos_embed=False):
         super().__init__(img_size=image_size, patch_size=patch_size, in_chans=in_chans,
                          num_classes=num_classes, embed_dim=dim, depth=depth, num_heads=heads)
 
@@ -30,8 +29,6 @@ class ViT3D(VisionTransformer):
 
         # 计算3D补丁数量
         patch_dim = patch_size
-        if center_crop:
-            image_size = center_crop
         num_patches = (image_size // patch_dim) ** 3
         patch_size_3d = (patch_dim, patch_dim, patch_dim)
         self.num_patches = num_patches
@@ -101,10 +98,11 @@ class ViT3D(VisionTransformer):
 
         # 创建MLP分类头
         self.mlp_head = nn.Sequential(
-            nn.Linear(mlp_input_dim, mlp_dim),
-            nn.GELU(),
-            nn.BatchNorm1d(mlp_dim),
-            nn.Linear(mlp_dim, num_classes)
+            # nn.Linear(mlp_input_dim, mlp_dim),
+            # nn.GELU(),
+            # nn.BatchNorm1d(mlp_dim),
+            # nn.Linear(mlp_dim, num_classes)
+            nn.Linear(mlp_input_dim, num_classes)
         )
 
         # 保存注意力权重用于可视化
@@ -202,14 +200,17 @@ class ViT3D(VisionTransformer):
             x = x + self.orig_pos_embedding
 
         # Dropout
-        x = self.dropout(x)
+        # x = self.dropout(x)
         # Transformer编码器
-        x = self.transformer(x)  # (batch_size, num_patches + 1, dim)
+
+        attention = []
+        for i in range(len(self.blocks)):
+            x = self.blocks[i](x)  # (batch_size, num_patches + 1, dim)
 
         # 提取分类令牌和补丁令牌
         cls_token_out = x[:, 0]  # (batch_size, dim)
         patch_tokens = x[:, 1:]  # (batch_size, num_patches, dim)
-
+        features = x
         # 根据池化方法聚合特征
         if self.pool == 'mean':
             pooled_patches = torch.mean(patch_tokens, dim=1)
@@ -222,7 +223,7 @@ class ViT3D(VisionTransformer):
 
         # 最终分类头
         out = self.mlp_head(combined_features)
-        return out
+        return out, features
 
     def load_pretrained_dino(self, path):
         """加载预训练的DINOv2权重"""

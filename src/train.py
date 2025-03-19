@@ -21,8 +21,11 @@ from models import create_transforms
 from models import CrossValidator
 from models import ViT3D
 from models import NoduleDataset
-from models import FocalLoss
 import os
+
+from models import FocalLoss, AttentionMCLoss, Enhanced3DVITLoss
+from one_epoch_train import one_epoch_train
+
 
 class ConfigManager:
     def __init__(self, config_path):
@@ -47,6 +50,7 @@ class ConfigManager:
 
     def get_scheduler_params(self):
         return self.scheduler["params"]
+
 
 def train_model(model, train_loader, val_loader, config, fold, device,
                 warmup_epochs=3, warmup_type='linear', max_grad_norm=1.0):
@@ -74,167 +78,73 @@ def train_model(model, train_loader, val_loader, config, fold, device,
 
     # 打印训练集中每个类的数量
     print(f"\n------- 第 {fold + 1} 折训练集类别数量 -------")
-    for cls, count in train_loader.dataset._data_counter.items() if hasattr(train_loader.dataset, '_data_counter') else []:
+    for cls, count in train_loader.dataset._data_counter.items() if hasattr(train_loader.dataset,
+                                                                            '_data_counter') else []:
         print(f"类别 {cls}: {count} 个样本")
     print("-----------------------------------\n")
 
-    # # 初始化损失函数
-    # if config.training["loss"]["class_weights"] == "auto":
-    #     # 从数据集中获取类别分布
-    #     if hasattr(train_loader.dataset, '_data_counter'):
-    #         class_counter = train_loader.dataset._data_counter
-    #     else:
-    #         # 统计训练集中的标签分布
-    #         class_counter = Counter()
-    #         for batch in train_loader:
-    #             _, labels = batch
-    #             class_counter.update(labels.cpu().numpy())
-    #
-    #     # 计算类别权重
-    #     classes = sorted(class_counter.keys())
-    #     class_counts = [class_counter[cls] for cls in classes]
-    #     class_weights = np.array([1.0 / (count if count > 0 else 1) for count in class_counts])
-    #     class_weights = class_weights / class_weights.sum() * len(class_weights)
-    #     class_weights = torch.FloatTensor(class_weights).to(device)
-    # else:
-    #     class_weights = None
-    #
-    # print(f"类别权重: {class_weights}")
-    # loss_fn = LabelSmoothingCrossEntropy(
-    #     smoothing=config.training["loss"]["smoothing"],
-    #     class_weights=class_weights
-    # )
 
+
+    # 损失函数
+    # loss_fn = torch.nn.CrossEntropyLoss()
     loss_fn = FocalLoss()
-
+    #
+    # criterion = Enhanced3DVITLoss(
+    #     cls_weight=1.0,  # 分类损失权重
+    #     diversity_weight=0.5,  # 通道多样性损失权重
+    #     orthogonal_weight=0.1,  # 正交性损失权重
+    #     local_weight=0.1,  # 局部特征增强损失权重
+    # )
+    criterion = None
     # 初始化混合精度训练
     scaler = amp.GradScaler()
     use_amp = device.type == 'cuda' and config.training["use_amp"]
     if use_amp:
         print("启用混合精度训练")
 
+    # 初始化最优指标
     best_val_f1 = 0
+    best_val_auc = 0  # 新增跟踪best AUC
     best_model_path = f'best_model_fold_{fold}.pth'
+    best_model_auc_path = f'best_auc_model_fold_{fold}.pth'  # 新增按AUC保存的最佳模型
 
-
-
-    #缓存验证集，优化评估过程
+    # 缓存验证集，优化评估过程
     print("缓存验证数据到GPU内存以加速评估...")
     val_data_cached = []
     for x, y in tqdm(val_loader, desc="缓存验证数据"):
         val_data_cached.append((x.to(device), y.to(device)))
+    val_loader_cached = val_data_cached  # 创建缓存数据的加载器
 
     for epoch in range(config.training["num_epochs"]):
         start_time = time.time()
 
-        # 训练阶段
-        model.train()
-        train_loss = 0
-        train_correct = 0
-        train_total = 0
+        # 训练阶段 - 使用封装的one_epoch_train函数
+        train_loss, train_metrics = one_epoch_train(
+            model=model,
+            data_loader=train_loader,
+            optimizer=optimizer,
+            loss_fn=loss_fn,
+            loss2=criterion,
+            device=device,
+            train=True,
+            use_amp=use_amp,
+            scaler=scaler,
+            max_grad_norm=max_grad_norm
+        )
 
-        # 使用tqdm显示进度条
-        for x, y in tqdm(train_loader, desc=f"Epoch {epoch+1} 训练", leave=False):
-            x, y = x.to(device), y.to(device)
-
-            optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
-
-            if use_amp:
-                # 使用自动混合精度
-                with amp.autocast():
-                    outputs = model(x)
-                    loss = loss_fn(outputs, y)
-
-                # 混合精度缩放梯度
-                scaler.scale(loss).backward()
-
-                # 实施梯度裁剪
-                # scaler.unscale_(optimizer)
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
-
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                outputs = model(x)
-                loss = loss_fn(outputs, y)
-                loss.backward()
-
-                # 实施梯度裁剪
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
-
-                optimizer.step()
-
-            train_loss += loss.item()
-            _, predicted = outputs.max(1)
-            train_total += y.size(0)
-            train_correct += predicted.eq(y).sum().item()
-
-        # 验证阶段
-        model.eval()
-        val_loss = 0
-        val_preds = []
-        val_labels = []
-        val_probs = []
-
-        with torch.no_grad():
-            for x, y in tqdm(val_data_cached, desc=f"Epoch {epoch+1} 验证", leave=False):  # 使用缓存的验证数据
-                if use_amp:
-                    with amp.autocast():
-                        outputs = model(x)
-                        loss = loss_fn(outputs, y)
-                else:
-                    outputs = model(x)
-                    loss = loss_fn(outputs, y)
-
-                val_loss += loss.item()
-
-                # 预测类别
-                _, predicted = outputs.max(1)
-                val_preds.extend(predicted.cpu().numpy())
-                val_labels.extend(y.cpu().numpy())
-
-                # 获取预测概率
-                probs = torch.softmax(outputs, dim=1)
-                val_probs.extend(probs.cpu().numpy())
-
-        # 转换为numpy数组，优化后续计算
-        val_preds_np = np.array(val_preds)
-        val_labels_np = np.array(val_labels)
-        val_probs_np = np.array(val_probs)
-
-        # 计算整体指标
-        val_acc = accuracy_score(val_labels_np, val_preds_np)
-        val_f1 = f1_score(val_labels_np, val_preds_np, average='macro')
-
-        # 处理AUC计算 - 根据类别数量自适应
-        num_classes = len(np.unique(val_labels_np))
-        if num_classes > 2:
-            # 多分类
-            val_auc = roc_auc_score(val_labels_np, val_probs_np, multi_class="ovr", average="macro")
-        else:
-            # 二分类
-            if val_probs_np.shape[1] > 1:
-                val_auc = roc_auc_score(val_labels_np, val_probs_np[:, 1])
-            else:
-                val_auc = roc_auc_score(val_labels_np, val_preds_np)
-
-        # 计算每个类的准确率 - 使用numpy操作而非循环
-        per_class_accuracy = {}
-        unique_classes = np.unique(val_labels_np)
-        for cls in unique_classes:
-            mask = (val_labels_np == cls)
-            correct = np.sum((val_preds_np == cls) & mask)
-            per_class_accuracy[cls] = correct / np.sum(mask) if np.sum(mask) > 0 else 0
-
-        # 将每个类的准确率压缩到一行字符串输出
-        per_class_str = ", ".join([f"Class {cls}: {acc:.4f}" for cls, acc in per_class_accuracy.items()])
-
-        # 保存最佳模型
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
-            # 使用torch.save的_use_new_zipfile_serialization=True选项加快保存速度
-            torch.save(model.state_dict(), best_model_path, _use_new_zipfile_serialization=True)
-            print(f"保存新的最佳模型，F1: {val_f1:.4f}")
+        # 验证阶段 - 使用封装的one_epoch_train函数
+        val_loss, val_metrics = one_epoch_train(
+            model=model,
+            data_loader=val_loader_cached,
+            optimizer=optimizer,
+            loss_fn=loss_fn,
+            loss2=criterion,
+            device=device,
+            train=False,
+            use_amp=use_amp,
+            scaler=scaler,
+            max_grad_norm=max_grad_norm
+        )
 
         # 计算当前学习率
         current_lr = optimizer.param_groups[0]['lr']
@@ -246,21 +156,36 @@ def train_model(model, train_loader, val_loader, config, fold, device,
         # 计算每轮训练时间
         epoch_time = time.time() - start_time
 
+        # 将每个类的准确率压缩到一行字符串输出
+        per_class_str = ", ".join([f"Class {cls}: {acc:.4f}" for cls, acc in val_metrics['per_class_accuracy'].items()])
+
+        # # 保存基于F1分数的最佳模型
+        if val_metrics['f1'] > best_val_f1:
+            best_val_f1 = val_metrics['f1']
+        #     # 使用torch.save的_use_new_zipfile_serialization=True选项加快保存速度
+        #     torch.save(model.state_dict(), best_model_path, _use_new_zipfile_serialization=True)
+        #     print(f"保存新的最佳模型(F1)，F1: {val_metrics['f1']:.4f}")
+
+        # 保存基于AUC的最佳模型（新增）
+        if val_metrics['auc'] > best_val_auc:
+            best_val_auc = val_metrics['auc']
+            # 使用torch.save的_use_new_zipfile_serialization=True选项加快保存速度
+            torch.save(model.state_dict(), best_model_auc_path, _use_new_zipfile_serialization=True)
+            print(f"保存新的最佳模型(AUC)，AUC: {val_metrics['auc']:.4f}")
+
         # 打印进度和指标
-        print(
-            f'Fold {fold + 1}, Epoch {epoch + 1}/{config.training["num_epochs"]} - 耗时: {epoch_time:.2f}s, LR: {current_lr:.6f}')
-        print(f'Train Loss: {train_loss / len(train_loader):.4f}, '
-              f'Train Acc: {train_correct / train_total:.4f}')
-        print(f'Val Loss: {val_loss / len(val_data_cached):.4f}, '
-              f'Val Acc: {val_acc:.4f}, '
-              f'Val F1: {val_f1:.4f}, '
-              f'Val AUC: {val_auc:.4f}')
-        print(f'Per Class Accuracies: {per_class_str}')
+        print(f'Fold {fold + 1}, Epoch {epoch + 1}/{config.training["num_epochs"]} - 耗时: {epoch_time:.2f}s, LR: {current_lr:.6f}')
+        print(f' Train Loss: {train_loss:.4f},'        f'    ACC: {train_metrics["accuracy"]:.4f}   AUC: {train_metrics["auc"]:.4f}')
+        print(f'   Val Loss: {val_loss:.4f},'          f'    ACC: {val_metrics["accuracy"]:.4f}   AUC: {val_metrics["auc"]:.4f}\n'
+              f'   Val   F1: {val_metrics["f1"]:.4f}')
+        print(f'Best Val F1: {best_val_f1:.4f},    Best Val     AUC: {best_val_auc:.4f}')
+        print(f'Per Cls Acc: {per_class_str}\n')
 
         # 更新学习率调度器
         scheduler.step()
 
-    return best_val_f1
+    # 返回最佳指标 (两个最佳指标)
+    return best_val_f1, best_val_auc
 
 def parse_args(config):
     parser = argparse.ArgumentParser()
@@ -283,7 +208,7 @@ def parse_args(config):
                         help='Type of learning rate warmup')
     parser.add_argument('--max_grad_norm', type=float, default=config.training["max_grad_norm"],
                         help='Maximum gradient norm for clipping')
-    parser.add_argument('--center_crop', type=str, default=config.training["center_crop"],
+    parser.add_argument('--crop_size', type=int, default=config.training["crop_size"],
                         help='Apply center cropping with size format "DxHxW", e.g. "64x64x64"')
     parser.add_argument('--augment', action='store_true', default=config.training["augment"],
                         help='Apply medical image augmentation')
@@ -294,7 +219,17 @@ def parse_args(config):
     parser.add_argument('--pretrained_path', type=str, default=config.training['pretrained_path'],
                         help='pretrained_path')
     parser.add_argument('--lr', type=float, default=config.optimizer['params']['lr'],
-                        help='pretrained_path')
+                        help='learning rate')
+    parser.add_argument('--patch_size', type=int, default=config.model['params']["patch_size"],
+                        help='patch size')
+    parser.add_argument('--dim', type=int, default=config.model['params']["dim"],
+                        help='embed dim')
+    parser.add_argument('--depth', type=int, default=config.model['params']["depth"],
+                        help='VIT encoder layer number')
+    parser.add_argument('--heads', type=int, default=config.model['params']["heads"],
+                        help='VIT encoder head number')
+    parser.add_argument('--pool', type=str, default=config.model['params']["pool"],
+                        help='pool: max min all')
     return parser.parse_args()
 
 def main():
@@ -340,20 +275,22 @@ def main():
     cv = CrossValidator(dataset, config)
     device = config.training['device']
 
-    # 存储每折的最佳F1分数
+    # 存储每折的最佳F1, AUC分数
     fold_scores = []
 
+    if args.crop_size:
+        config.model["params"]["image_size"] = args.crop_size
+        args.image_size = args.crop_size
     # 预加载模型配置，避免在循环中重复访问
     model_config = {
         "num_classes": config.data["num_classes"],
         "image_size": args.image_size,
-        "patch_size": config.model["params"]["patch_size"],
-        "dim": config.model["params"]["dim"],
-        "depth": config.model["params"]["depth"],
-        "heads": config.model["params"]["heads"],
+        "patch_size": args.patch_size,
+        "dim": args.dim,
+        "depth": args.depth,
+        "heads": args.heads,
         "mlp_dim": config.model["params"]["mlp_dim"],
-        "pool": config.model["params"]["pool"],
-        "center_crop": config.training["center_crop"]
+        "pool": args.pool
     }
 
     # 进行交叉验证
@@ -370,13 +307,6 @@ def main():
 
         # 初始化新的模型
         model = ViT3D(**model_config).to(device)
-
-        # 打印模型结构
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"模型总参数量: {total_params:,}")
-        print(f"可训练参数量: {trainable_params:,}")
-
         # 加载预训练权重
         if args.pretrained_path:
             print(f"Loading pretrained weights from {args.pretrained_path}...")
@@ -385,35 +315,33 @@ def main():
             except Exception as e:
                 print(f"加载预训练权重出错: {str(e)}")
 
-        # 训练模型
-        best_f1 = train_model(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            config=config,
-            device=device,
-            fold=fold,
-            warmup_epochs=args.warmup_epochs,
-            warmup_type=args.warmup_type,
-            max_grad_norm=args.max_grad_norm,
-        )
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"模型总参数量: {total_params:,}")
+        print(f"可训练参数量: {trainable_params:,}")
 
-        fold_scores.append(best_f1)
+        # 训练模型
+        best_f1, best_auc = train_model(model=model, train_loader=train_loader, val_loader=val_loader, config=config, device=device, fold=fold)
+
+        fold_scores.append((best_f1, best_auc))
         fold_time = time.time() - fold_start_time
-        print(f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {best_f1:.4f}')
+        print(f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {best_f1:.4f} with Best AUC: {best_auc:.4f}')
 
         # 释放模型内存
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
+    fold_scores = np.array(fold_scores)
     # 打印最终结果
     print('\nCross-Validation Results:')
     for fold, score in enumerate(fold_scores):
-        print(f'Fold {fold + 1}: {score:.4f}')
-    mean_f1 = np.mean(fold_scores)
-    std_f1 = np.std(fold_scores)
-    print(f'Mean F1: {mean_f1:.4f} ± {std_f1:.4f}')
+        print(f'Fold {fold + 1}: F1 {score[0]:.4f}   AUC {score[1]:.4f}')
+    mean_f1 = np.mean(fold_scores[:, 0])
+    std_f1 = np.std(fold_scores[:, 0])
+    mean_auc = np.mean(fold_scores[:, 1])
+    std_auc = np.std(fold_scores[:, 1])
+    print(f'Mean F1: {mean_f1:.4f} ± {std_f1:.4f}\n'
+          f'Mean AUC: {mean_auc:.4f} ± {std_auc:.4f}\n')
 
     # 打印总运行时间
     total_time = time.time() - start_time
