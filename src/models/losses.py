@@ -1,135 +1,26 @@
-from random import random
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class LabelSmoothingCrossEntropy(nn.Module):
-    def __init__(self, smoothing=0.1, class_weights=None):
-        """
-        :param smoothing: Smoothing factor for label smoothing.
-        :param class_weights: Tensor of shape (num_classes,) containing weights for each class.
-        """
-        super(LabelSmoothingCrossEntropy, self).__init__()
-        self.smoothing = smoothing
-        self.class_weights = class_weights
-
-    def forward(self, pred, target):
-        """
-        :param pred: Predictions of shape (batch_size, num_classes)
-        :param target: Ground truth labels of shape (batch_size,)
-        :return: Loss (scalar)
-        """
-        n_classes = pred.size(1)
-
-        # Create smoothed labels
-        with torch.no_grad():
-            true_dist = torch.zeros_like(pred)
-            true_dist.fill_(self.smoothing / (n_classes - 1))
-            true_dist.scatter_(1, target.unsqueeze(1), 1 - self.smoothing)
-
-        log_probs = F.log_softmax(pred, dim=1)
-
-        if self.class_weights is not None:
-            # Ensure class_weights is on the same device as pred
-            self.class_weights = self.class_weights.to(pred.device)
-            loss = -(true_dist * log_probs * self.class_weights.unsqueeze(0)).sum(dim=1)
-        else:
-            loss = -(true_dist * log_probs).sum(dim=1)
-
-        return loss.mean()
+LOSS_REGISTRY = {
+    "CrossEntropyLoss": nn.CrossEntropyLoss,
+    "FocalLoss": None,  # 将在下面定义
+    "None": None  # 无
+}
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2., alpha=0.25):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
 
-class AttentionMCLoss(nn.Module):
-    """
-    基于注意力权重的MC-Loss实现
-    """
-
-    def __init__(self, embed_dim, num_classes, lambda_disc=0.1, temperature=1.0):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.num_classes = num_classes
-        self.lambda_disc = lambda_disc
-        self.temperature = temperature
-
-        # 用于分类的投影层
-        self.classifier = nn.Linear(embed_dim, num_classes)
-
-    def create_mask(self, batch_size, device):
-        """创建通道级随机掩码，保持2:1的开启/关闭比例"""
-        mask_template = [1, 1, 0]  # 2:1的开启/关闭比例
-        mask = []
-
-        for _ in range(self.embed_dim // len(mask_template)):
-            shuffled = random.sample(mask_template, len(mask_template))
-            mask.extend(shuffled)
-
-        # 处理剩余维度
-        remainder = self.embed_dim % len(mask_template)
-        if remainder > 0:
-            mask.extend([1] * remainder)
-
-        # 扩展到批次维度
-        mask = np.array([mask for _ in range(batch_size)], dtype=np.float32)
-        return torch.from_numpy(mask).to(device)
-
-    def forward(self, features, attention_weights, targets):
-        """
-        计算基于注意力的MC-Loss
-
-        Args:
-            features: ViT最后层特征 [batch_size, seq_len, embed_dim]
-            attention_weights: 注意力权重 [batch_size, layers, heads, seq_len, seq_len]
-            targets: 目标类别 [batch_size]
-
-        Returns:
-            total_loss: 总损失
-            cls_loss: 分类损失
-            disc_loss: 判别损失
-        """
-        batch_size = features.size(0)
-        device = features.device
-
-        # 提取最后一层的CLS token注意力权重 [batch_size, heads, seq_len]
-        # attention_weights的形状为 [batch, layers, heads, seq_len, seq_len]
-        # 我们取最后一层(索引-1)的注意力权重
-        last_layer_attn = attention_weights[:, -1]  # [batch, heads, seq_len, seq_len]
-        cls_attn = last_layer_attn[:, :, 0, 1:]  # [batch, heads, seq_len-1] (剔除CLS token自注意)
-
-        # 提取CLS token特征
-        cls_features = features[:, 0]  # [batch_size, embed_dim]
-
-        # 创建并应用掩码
-        mask = self.create_mask(batch_size, device)
-        masked_cls = cls_features * mask
-
-        # 计算判别损失：鼓励每个注意力头关注不同区域
-        # 对每个头的注意力应用softmax
-        cls_attn_softmax = F.softmax(cls_attn / self.temperature, dim=2)
-
-        # 获取每个头最大的注意力权重
-        max_attn, _ = torch.max(cls_attn_softmax, dim=2)  # [batch, heads]
-
-        # 判别损失：鼓励每个头有明确的注意力焦点
-        disc_loss = 1.0 - torch.mean(max_attn)
-
-        # 分类损失：使用掩码后的CLS token进行分类
-        logits = self.classifier(masked_cls)
-        cls_loss = F.cross_entropy(logits, targets)
-
-        # 总损失
-        total_loss = cls_loss + self.lambda_disc * disc_loss
-
-        return total_loss, cls_loss, disc_loss, logits
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
+    def forward(self, inputs, targets):
+        ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        return focal_loss.mean()
 
 class Enhanced3DVITLoss(nn.Module):
     def __init__(self,
@@ -267,3 +158,144 @@ class Enhanced3DVITLoss(nn.Module):
 
         return total_loss, loss_dict
 
+
+"""
+边界流场损失模块
+用于增强3D结节浸润性判断的边界流场特征学习
+"""
+class BoundaryFlowLoss(nn.Module):
+    """
+    简化的边界流场损失
+    """
+    def __init__(self, weight=0.5, margin=0.3):
+        super().__init__()
+        self.weight = weight
+        self.margin = margin
+
+    def forward(self, features, labels):
+        """计算边界流场损失"""
+        # 处理特征输入
+        if isinstance(features, (list, tuple)):
+            # 选择中间层特征
+            features = features[len(features) // 2]
+
+        # 确保特征是标准张量
+        if hasattr(features, 'as_tensor'):
+            features = features.as_tensor()
+
+        # 跳过不符合形状要求的特征
+        if features.ndim != 5:  # 需要[B,C,D,H,W]格式
+            return torch.tensor(0.0, device=labels.device), {'total_flow_loss': 0.0}
+
+        # 安全地计算3D梯度 - 避免维度问题
+        # 1. 计算各方向梯度
+        with torch.no_grad():  # 提高效率，梯度计算不需要自动微分
+            # 深度方向梯度
+            if features.shape[2] > 1:
+                grad_d = features[:, :, 1:] - features[:, :, :-1]
+            else:
+                grad_d = torch.zeros_like(features[:, :, :1])
+
+            # 高度方向梯度
+            if features.shape[3] > 1:
+                grad_h = features[:, :, :, 1:] - features[:, :, :, :-1]
+            else:
+                grad_h = torch.zeros_like(features[:, :, :, :1])
+
+            # 宽度方向梯度
+            if features.shape[4] > 1:
+                grad_w = features[:, :, :, :, 1:] - features[:, :, :, :, :-1]
+            else:
+                grad_w = torch.zeros_like(features[:, :, :, :, :1])
+
+        # 2. 计算边界复杂度特征
+        # 边界强度 - 梯度幅值
+        grad_d_abs = torch.mean(torch.abs(grad_d), dim=[1, 2, 3, 4])
+        grad_h_abs = torch.mean(torch.abs(grad_h), dim=[1, 2, 3, 4])
+        grad_w_abs = torch.mean(torch.abs(grad_w), dim=[1, 2, 3, 4])
+
+        # 边界复杂度指标 - 三个方向梯度的综合
+        boundary_complexity = grad_d_abs + grad_h_abs + grad_w_abs
+
+        # 3. 分离浸润性和非浸润性样本
+        invasive_mask = (labels == 1)
+        non_invasive_mask = (labels == 0)
+
+        # 4. 计算对比损失
+        loss = torch.tensor(0.0, device=features.device)
+
+        if torch.any(invasive_mask) and torch.any(non_invasive_mask):
+            # 获取两类样本的边界复杂度
+            invasive_complexity = boundary_complexity[invasive_mask].mean()
+            non_invasive_complexity = boundary_complexity[non_invasive_mask].mean()
+
+            # 浸润性结节应有更高的边界复杂度
+            loss = F.relu(non_invasive_complexity - invasive_complexity + self.margin)
+
+        # 5. 计算最终损失值
+        weighted_loss = self.weight * loss
+
+        # 返回损失和诊断信息
+        loss_info = {
+            'flow_loss': loss.item(),
+            'total_flow_loss': weighted_loss.item(),
+            'invasive_complexity': invasive_complexity.item() if 'invasive_complexity' in locals() else 0,
+            'non_invasive_complexity': non_invasive_complexity.item() if 'non_invasive_complexity' in locals() else 0
+        }
+
+        return weighted_loss, loss_info
+
+
+class EdgeAwareFlowModule(nn.Module):
+    """
+    边缘感知流场模块
+
+    为ViT模型提取边缘流场特征
+
+    参数:
+        in_channels: 输入通道数
+        out_channels: 输出通道数
+    """
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.norm1 = nn.InstanceNorm3d(out_channels)
+        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.norm2 = nn.InstanceNorm3d(out_channels)
+
+        # 边缘注意力机制
+        self.edge_attention = nn.Sequential(
+            nn.Conv3d(out_channels, 1, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        """前向传播"""
+        # 提取特征
+        feat = F.gelu(self.norm1(self.conv1(x)))
+        feat = self.norm2(self.conv2(feat))
+
+        # 计算边缘注意力 - 关注梯度高的区域
+        edge_map = self.edge_attention(torch.abs(feat))
+
+        # 边缘加权特征
+        refined_features = feat * edge_map
+
+        return refined_features, edge_map
+
+
+LOSS_REGISTRY["FocalLoss"] = FocalLoss
+LOSS_REGISTRY["BoundaryFlowLoss"] = BoundaryFlowLoss
+
+
+def build_loss(enabled, name, config):
+    """根据配置构建损失函数"""
+    if enabled is False:
+        return None
+    # 构建损失函数实例
+    loss = LOSS_REGISTRY[name]()  # 注意加 () 才算调用构造函数
+    loss_params = config.losses[name]['params']
+    if loss_params:
+        loss = LOSS_REGISTRY[name](**loss_params)
+
+    return loss

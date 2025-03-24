@@ -4,59 +4,68 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
 
 
-def one_epoch_train(model, data_loader, optimizer, loss_fn,  device, loss2=None,
+def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss2=None, loss3=None,
                     train=True, use_amp=False, scaler=None, max_grad_norm=1.0):
     """执行一个epoch的训练或验证"""
     # 设置模型状态
     model.train() if train else model.eval()
 
     losses, all_preds, all_labels, all_probs = [], [], [], []
+    flow_losses = []
     data_iter = tqdm(data_loader, desc="训练中" if train else "验证中", leave=False, position=0)
+
+    # 定义前向传播和损失计算函数
+    def forward_pass(inputs):
+
+        outputs, features, flow = model(inputs)
+
+        loss = loss_fn(outputs, y)
+        flow_info = {}
+        if loss3:
+            flow_loss, flow_info = loss3(features, y)
+            loss += flow_loss
+
+        return outputs, loss, flow_info
+
     # 训练或验证循环
     with torch.set_grad_enabled(train):
         for x, y in data_iter:
             x, y = x.to(device), y.to(device)
 
-            # 训练模式
             if train:
                 optimizer.zero_grad(set_to_none=True)
 
                 if use_amp:
                     with torch.cuda.amp.autocast():
-                        outputs, features = model(x)
+                        outputs, loss, flow_info = forward_pass(x)
 
-                        loss = loss_fn(outputs, y)
-                        if loss2:
-                            ChannelLoss, loss_dict = loss2(outputs, y, features)
-                            loss += ChannelLoss
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    outputs, features = model(x)
-                    loss = loss_fn(outputs, y)
+                    outputs, loss, flow_info = forward_pass(x)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     optimizer.step()
-            # 验证模式
             else:
-                outputs, features = model(x)
-                loss = loss_fn(outputs, y)
-                if loss2:
-                    ChannelLoss, loss_dict = loss2(outputs, y, features)
-                    loss += ChannelLoss
+                outputs, loss, flow_info = forward_pass(x)
+
+            # 记录流场损失
+            if loss3 and 'total_flow_loss' in flow_info:
+                flow_losses.append(flow_info['total_flow_loss'])
 
             # 收集结果
             losses.append(loss.item())
             _, preds = outputs.max(1)
-            probs = torch.softmax(outputs, dim=1)
+            probs = torch.nn.functional.softmax(outputs, dim=1)
 
             all_preds.extend(preds.detach().cpu().numpy())
             all_labels.extend(y.detach().cpu().numpy())
             all_probs.extend(probs.detach().cpu().numpy())
 
+    # 转换为NumPy数组以计算指标
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
@@ -68,20 +77,25 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn,  device, loss2=None,
         'loss': np.mean(losses)
     }
 
-    # 计算AUC
+    # 添加流场损失指标
+    if loss3 is not None and flow_losses:
+        metrics['flow_loss'] = np.mean(flow_losses)
 
+    # 计算AUC
     num_classes = all_probs.shape[1]
     if num_classes > 2:
         metrics["auc"] = roc_auc_score(all_labels, all_probs, multi_class='ovr')
     else:
-        # 二分类情况下，使用正类概率而不是预测标签
         metrics["auc"] = roc_auc_score(all_labels, all_probs[:, 1])
-        # print(roc_auc_score(all_labels, all_probs[:, 0]), roc_auc_score(all_labels, all_probs[:, 1]), roc_auc_score(all_labels, all_preds))
+
     # 计算每类准确率
     unique_classes = np.unique(all_labels)
     metrics['per_class_accuracy'] = {
         cls: np.mean(all_preds[all_labels == cls] == cls)
         for cls in unique_classes
     }
+    metrics['predictions'] = all_preds
+    metrics['labels'] = all_labels
+    metrics['probabilities'] = all_probs
 
     return np.mean(losses), metrics
