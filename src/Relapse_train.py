@@ -23,7 +23,7 @@ from models import ViT3D
 from models import NoduleDataset, RecurrenceDataset
 import os
 
-from models import FocalLoss, AttentionMCLoss, Enhanced3DVITLoss
+from models import FocalLoss, Enhanced3DVITLoss
 from one_epoch_train import one_epoch_train
 
 
@@ -306,7 +306,7 @@ def main():
 
         # 初始化新的模型
         model = ViT3D(**model_config).to(device)
-        model.load_state_dict(torch.load(r'E:\workplace\3D\src\best_auc_model_fold_3.pth'))
+        model.load_state_dict(torch.load(args.pretrained_path))
         # # 加载预训练权重
         # if args.pretrained_path:
         #     print(f"Loading pretrained weights from {args.pretrained_path}...")

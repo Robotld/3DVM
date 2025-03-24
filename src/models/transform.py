@@ -56,7 +56,7 @@ def create_transforms(config, args):
             # RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
             RandScaleIntensityd(keys=["image"], prob=0.3, factors=0.1),
             RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),
-            # RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
+            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
         ]
 
     # 3. 剩余的标准处理 - 所有数据都需要的步骤

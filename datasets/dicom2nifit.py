@@ -10,8 +10,8 @@ from tqdm import tqdm
 
 # ================== 配置参数 ==================
 DICOM_ROOT = Path(r"G:\2021年及之前协和CT")
-OUTPUT_ROOT = Path(r"G:\datasets3D\3d_data_2")
-TARGET_SPACING = (1.0, 1.0, 1.0)  # 各向同性分辨率
+OUTPUT_ROOT = Path(r"G:\datasets3D\test")
+TARGET_SPACING = (0.5, 0.5, 0.5)  # 各向同性分辨率
 CLASS_MAP = {
     "原位癌": "3",
     "微浸润": "4",

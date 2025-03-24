@@ -3,8 +3,8 @@ from .lr_scheduler import WarmupScheduler
 from .transform import create_transforms
 from .CrossVakudator import CrossValidator
 from .ViT_3D import ViT3D
-from .dataset import NoduleDataset
-from .focal_loss import FocalLoss
+from .dataset import NoduleDataset, RecurrenceDataset
+from .losses import Enhanced3DVITLoss, BoundaryFlowLoss, EdgeAwareFlowModule, FocalLoss, build_loss
 
 
 

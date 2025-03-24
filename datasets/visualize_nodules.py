@@ -227,9 +227,7 @@ def batch_visualize_nodules(nodule_dir, num_samples=3):
         nodule_files = list(class_path.glob("*.nii.gz"))
         if nodule_files:
             # Sample up to num_samples nodules per class
-            samples = np.random.choice(nodule_files,
-                                       size=min(num_samples, len(nodule_files)),
-                                       replace=False)
+            samples = np.random.choice(nodule_files, size=min(num_samples, len(nodule_files)), replace=False)
             nodules_by_class[class_dir] = samples
 
     class_names = {
@@ -271,7 +269,7 @@ def batch_visualize_nodules(nodule_dir, num_samples=3):
 
 
 if __name__ == "__main__":
-    NODULE_DIR = r"G:\datasets\nodule_patches64"
+    NODULE_DIR = r"G:\datasets3D\3d_data_1"
 
     if len(sys.argv) > 1:
         # Check command line arguments

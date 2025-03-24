@@ -18,6 +18,7 @@ class ViT3D(VisionTransformer):
                  emb_dropout=0.1,
                  patch_size=16,
                  image_size=96,
+                 crop_size=36,
                  in_chans=1,
                  pool='max',
                  use_3d_pos_embed=False):
@@ -27,6 +28,8 @@ class ViT3D(VisionTransformer):
         self.pool = pool
         self.use_3d_pos_embed = use_3d_pos_embed
 
+        if crop_size:
+            image_size = crop_size
         # 计算3D补丁数量
         patch_dim = patch_size
         num_patches = (image_size // patch_dim) ** 3
@@ -102,12 +105,71 @@ class ViT3D(VisionTransformer):
             # nn.GELU(),
             # nn.BatchNorm1d(mlp_dim),
             # nn.Linear(mlp_dim, num_classes)
-            nn.Linear(mlp_input_dim, num_classes)
+            nn.Linear(mlp_input_dim, num_classes),
+            # nn.Sigmoid()
         )
 
         # 保存注意力权重用于可视化
         self.attention_weights = None
 
+    # 添加到ViT3D类中
+    def extract_intermediate_features(self, x):
+        """
+        提取中间层特征用于流场分析
+
+        参数:
+            x: 输入张量
+
+        返回:
+            中间特征列表和最终特征
+        """
+        batch_size = x.shape[0]
+
+        # 生成3D补丁嵌入
+        x = self.patch_embedding(x)
+
+        # 保存补丁嵌入特征
+        patch_features = x.clone()
+
+        # 获取实际补丁数量
+        d_patches = x.shape[2]
+        h_patches = x.shape[3]
+        w_patches = x.shape[4]
+
+        # 展平补丁并转置为序列形式
+        x = x.flatten(2).transpose(1, 2)
+
+        # 添加分类令牌
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+
+        # 添加位置编码
+        if self.use_3d_pos_embed:
+            patch_pos_embed = self.generate_3d_positional_embedding(
+                d_patches, h_patches, w_patches, self.embed_dim
+            )
+            pos_embed = torch.cat([self.cls_pos_embed, patch_pos_embed], dim=1)
+            x = x + pos_embed
+        else:
+            x = x + self.orig_pos_embedding
+
+        # 存储中间特征
+        intermediate_features = []
+
+        # 通过Transformer层
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            # 每隔几层保存一次特征
+            if i % 2 == 0 or i == len(self.blocks) - 1:
+                # 提取只包含补丁的特征(排除CLS token)
+                patch_tokens = x[:, 1:].clone()
+                # 重塑回3D体积形状用于流场分析
+                reshaped = patch_tokens.transpose(1, 2).reshape(
+                    batch_size, self.embed_dim, d_patches, h_patches, w_patches
+                )
+                intermediate_features.append(reshaped)
+
+        return intermediate_features, x
     def generate_3d_positional_embedding(self, d, h, w, dim):
         """
         生成3D感知的位置编码
@@ -200,12 +262,24 @@ class ViT3D(VisionTransformer):
             x = x + self.orig_pos_embedding
 
         # Dropout
-        # x = self.dropout(x)
+        x = self.dropout(x)
         # Transformer编码器
 
         attention = []
-        for i in range(len(self.blocks)):
-            x = self.blocks[i](x)  # (batch_size, num_patches + 1, dim)
+        # 存储中间特征
+        intermediate_features = []
+        # 通过Transformer层
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            # 每隔几层保存一次特征
+            # if i % 2 == 0 or i == len(self.blocks) - 1:
+            # 提取只包含补丁的特征(排除CLS token)
+            patch_tokens = x[:, 1:].clone()
+            # 重塑回3D体积形状用于流场分析
+            reshaped = patch_tokens.transpose(1, 2).reshape(
+                batch_size, self.embed_dim, d_patches, h_patches, w_patches
+            )
+            intermediate_features.append(reshaped)
 
         # 提取分类令牌和补丁令牌
         cls_token_out = x[:, 0]  # (batch_size, dim)
@@ -223,7 +297,7 @@ class ViT3D(VisionTransformer):
 
         # 最终分类头
         out = self.mlp_head(combined_features)
-        return out, features
+        return out, features, intermediate_features
 
     def load_pretrained_dino(self, path):
         """加载预训练的DINOv2权重"""
