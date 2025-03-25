@@ -286,8 +286,8 @@ def main():
 
     # 进行交叉验证
     for fold, train_loader, val_loader, train_counter in cv.get_folds(train_transforms, val_transforms):
-        if fold != 0 and fold != 4:
-            continue
+        # if fold != 4:
+        #     continue
         # 记录每个fold的数据计数器，用于计算类别权重
         train_loader.dataset._data_counter = train_counter
 

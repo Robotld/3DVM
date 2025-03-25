@@ -17,7 +17,7 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss1_weight
     # 定义前向传播和损失计算函数
     def forward_pass(inputs):
         model_outputs, features, flow = model(inputs)
-        loss_all = loss1_weight * loss_fn(outputs, y)
+        loss_all = loss1_weight * loss_fn(model_outputs, y)
         info = {}
         if loss3:
             flow_loss, info = loss3(features, y)
