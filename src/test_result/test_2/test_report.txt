@@ -1,0 +1,22 @@
+测试结果:
+准确率 (Accuracy): 0.8087
+F1 分数 (macro): 0.8087
+AUC: 0.8729
+
+每类准确率:
+Invasive: 0.7852
+Non-invasive: 0.8340
+
+分类报告:
+              precision    recall  f1-score   support
+
+           0       0.84      0.79      0.81       284
+           1       0.78      0.83      0.81       265
+
+    accuracy                           0.81       549
+   macro avg       0.81      0.81      0.81       549
+weighted avg       0.81      0.81      0.81       549
+
+混淆矩阵:
+[[223  61]
+ [ 44 221]]
