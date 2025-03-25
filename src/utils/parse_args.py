@@ -57,7 +57,8 @@ def parse_args(config):
     parser.add_argument("--loss3", type = bool, default = config.losses['BoundaryFlowLoss']['enabled'],
                         help = "是否使用BoundaryFlowLoss")
 
-    parser.add_argument("--loss1_weight", type = float, default = 1.0, help = "主损失函数权重")
-    parser.add_argument("--loss2_weight", type = float, default = 0.5, help = "辅助损失函数1权重")
-    parser.add_argument("--loss3_weight", type = float, default = 0.3, help = "辅助损失函数2权重")
+    parser.add_argument("--loss1_weight", type = float, default = config.losses['BoundaryFlowLoss']['weight'], help = "主损失函数权重")
+    parser.add_argument("--loss2_weight", type = float, default = config.losses['FocalLoss']['weight'], help = "辅助损失函数1权重")
+    parser.add_argument("--loss3_weight", type = float, default = config.losses['BoundaryFlowLoss']['weight'], help = "辅助损失函数2权重")
+
     return parser.parse_args()

@@ -85,6 +85,9 @@ def update_config_from_args(config, args):
         "loss1": ["losses", 'CrossEntropyLoss', 'enabled'],
         "loss2": ["losses", 'FocalLoss', 'enabled'],
         "loss3": ["losses", 'BoundaryFlowLoss', 'enabled'],
+        "--loss1_weight": ["losses", 'CrossEntropyLoss', 'weight'],
+        "--loss2_weight": ["losses", 'FocalLoss', 'weight'],
+        "--loss3_weight": ["losses", 'BoundaryFlowLoss', 'weight'],
     }
 
     # 更新配置

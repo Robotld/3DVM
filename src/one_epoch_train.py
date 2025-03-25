@@ -4,7 +4,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
 
 
-def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss2=None, loss3=None,
+def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss1_weight=1.0, loss2=None, loss3=None, loss3_weight=0.5,
                     train=True, use_amp=False, scaler=None, max_grad_norm=1.0):
     """执行一个epoch的训练或验证"""
     # 设置模型状态
@@ -16,16 +16,14 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss2=None, 
 
     # 定义前向传播和损失计算函数
     def forward_pass(inputs):
-
-        outputs, features, flow = model(inputs)
-
-        loss = loss_fn(outputs, y)
-        flow_info = {}
+        model_outputs, features, flow = model(inputs)
+        loss_all = loss1_weight * loss_fn(outputs, y)
+        info = {}
         if loss3:
-            flow_loss, flow_info = loss3(features, y)
-            loss += flow_loss
+            flow_loss, info = loss3(features, y)
+            loss_all += loss3_weight*flow_loss
 
-        return outputs, loss, flow_info
+        return model_outputs, loss_all, info
 
     # 训练或验证循环
     with torch.set_grad_enabled(train):

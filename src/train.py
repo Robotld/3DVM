@@ -118,6 +118,8 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
             loss_fn=loss,
             loss2=loss2,
             loss3=loss3,
+            loss1_weight=args.loss1_weight,
+            loss3_weight = args.loss3_weight,
             device=device,
             train=True,
             use_amp=use_amp,
@@ -134,6 +136,8 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
             loss_fn=loss,
             loss2=loss2,
             loss3=loss3,
+            loss1_weight = args.loss1_weight,
+            loss3_weight = args.loss3_weight,
             device=device,
             train=False,
             use_amp=use_amp,
@@ -282,6 +286,8 @@ def main():
 
     # 进行交叉验证
     for fold, train_loader, val_loader, train_counter in cv.get_folds(train_transforms, val_transforms):
+        if fold != 0 and fold != 4:
+            continue
         # 记录每个fold的数据计数器，用于计算类别权重
         train_loader.dataset._data_counter = train_counter
 
