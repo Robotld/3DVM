@@ -1,133 +1,20 @@
 from collections import Counter
-
 import numpy as np
 from monai.data import DataLoader
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import Subset, Dataset
-
-import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler
-import numpy as np
+from .balanced_sampler import BalancedBatchSampler
 
 
-def create_balanced_sampler(dataset):
-    # 获取所有标签
-    all_labels = [sample['label'] for sample in dataset.samples]
-
-    # 计算类别权重（反比于频率）
-    class_counts = np.bincount(all_labels)
-    class_weights = 1.0 / class_counts
-
-    # 为每个样本分配权重
-    sample_weights = [class_weights[label] for label in all_labels]
-
-    # 创建WeightedRandomSampler
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(all_labels),
-        replacement=True
-    )
-
-    return sampler
-
-
-class CrossValidator:
-    def __init__(self, dataset, config):
-        self.dataset = dataset
-        self.config = config.cross_validation
-        self.train_config = config.training
-
-        # 获取所有标签用于分层采样 - 使用缓存优化
-        self.all_labels = np.array([label for _, label in dataset])
-
-        # 使用Counter更快统计
-        label_counter = Counter(self.all_labels)
-        total_samples = len(self.all_labels)
-
-        print("\n------- 数据集类别分布 -------")
-        for label, count in sorted(label_counter.items()):
-            percentage = count / total_samples * 100
-            print(f"类别 {label}: {count} 个样本 ({percentage:.2f}%)")
-        print("----------------------------\n")
-
-        # 初始化分层K折交叉验证器
-        self.skf = StratifiedKFold(
-            n_splits=self.config["n_splits"],
-            shuffle=self.config["shuffle"],
-            random_state=self.train_config["random_seed"]
-        )
-
-    def get_folds(self, train_transforms=None, val_transforms=None):
-        """
-        生成交叉验证的折，并应用适当的变换
-        参数:
-            train_transforms: 训练集使用的变换
-            val_transforms: 验证集使用的变换
-        """
-        # 预计算所有fold，避免重复计算
-        all_splits = list(self.skf.split(np.zeros(len(self.all_labels)), self.all_labels))
-
-        for fold, (train_idx, val_idx) in enumerate(all_splits):
-            # 创建训练集和验证集的子集，但还不应用变换
-            train_subset = Subset(self.dataset, train_idx)
-            val_subset = Subset(self.dataset, val_idx)
-
-            # 创建包含变换的训练集和验证集
-            train_dataset_with_transform = TransformDataset(train_subset, transform=train_transforms)
-            val_dataset_with_transform = TransformDataset(val_subset, transform=val_transforms)
-
-            # 高效获取标签
-            train_labels = self.all_labels[train_idx]
-            val_labels = self.all_labels[val_idx]
-
-            # 使用Counter高效统计
-            train_counter = Counter(train_labels)
-            val_counter = Counter(val_labels)
-
-            total_train = len(train_labels)
-            total_val = len(val_labels)
-
-            print(f"\n------- 第 {fold + 1} 折的类别分布 -------")
-            print("训练集:")
-            for label, count in sorted(train_counter.items()):
-                percentage = count / total_train * 100
-                print(f"  类别 {label}: {count} 个样本 ({percentage:.2f}%)")
-
-            print("验证集:")
-            for label, count in sorted(val_counter.items()):
-                percentage = count / total_val * 100
-                print(f"  类别 {label}: {count} 个样本 ({percentage:.2f}%)")
-            print("-----------------------------------\n")
-
-            # 使用pin_memory和persistent_workers加速数据加载
-            train_loader = DataLoader(
-                train_dataset_with_transform,  # 使用带变换的训练集
-                batch_size=self.train_config["batch_size"],
-                shuffle=True,
-                num_workers=self.train_config["num_workers"],
-                pin_memory=True,
-                persistent_workers=True if self.train_config["num_workers"] > 0 else False
-            )
-
-            val_loader = DataLoader(
-                val_dataset_with_transform,  # 使用带变换的验证集
-                batch_size=self.train_config["batch_size"] * 2,  # 验证时可用更大的batch size
-                shuffle=False,
-                num_workers=self.train_config["num_workers"],
-                pin_memory=True,
-                persistent_workers=True if self.train_config["num_workers"] > 0 else False
-            )
-
-            yield fold, train_loader, val_loader, train_counter
-
-
-# 添加一个辅助类，用于在Subset上应用变换
 class TransformDataset(Dataset):
-    def __init__(self, dataset, transform=None):
+    """应用MONAI转换的数据集包装器"""
+
+    def __init__(self, dataset, transform=None, labels=None):
         self.dataset = dataset
         self.transform = transform
+        self.labels = labels  # 预计算的标签数据
 
-        # 复制原始数据集的属性
+        # 复制原数据集属性
         if hasattr(dataset, '_data_counter'):
             self._data_counter = dataset._data_counter
 
@@ -135,20 +22,125 @@ class TransformDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        # 从原始数据集中获取数据
         img_path, label = self.dataset[idx]
+        if not self.transform:
+            return img_path, label
 
-        # 如果有变换，应用它 (MONAI需要字典格式)
-        if self.transform:
-            # 需要先创建字典格式
-            data_dict = {
-                "image": img_path,  # 路径字符串
-                "label": label  # 数值标签
-            }
-            # MONAI的LoadImaged会自动加载图像
-            transformed = self.transform(data_dict)
-            # 确保返回的是张量，不是字典
-            return transformed["image"], transformed["label"]
+        # 应用MONAI转换
+        transformed = self.transform({"image": img_path, "label": label})
+        return transformed["image"], transformed["label"]
 
-        # 如果没有变换，返回原始数据
-        return img_path, label
+
+def _print_fold_stats(fold, train_labels, val_labels):
+    """打印当前折的类别统计"""
+    train_counts = Counter(train_labels)
+    val_counts = Counter(val_labels)
+
+    print(f"\n------- 第 {fold + 1} 折的类别分布 -------")
+    print("训练集:")
+    for label, count in sorted(train_counts.items()):
+        percentage = count / len(train_labels) * 100
+        print(f"  类别 {label}: {count} 个样本 ({percentage:.2f}%)")
+
+    print("验证集:")
+    for label, count in sorted(val_counts.items()):
+        percentage = count / len(val_labels) * 100
+        print(f"  类别 {label}: {count} 个样本 ({percentage:.2f}%)")
+    print("-----------------------------------\n")
+
+
+def _print_sampler_stats(sampler):
+    """打印采样器配置"""
+    print("\n------- Batch采样配置 -------")
+    print(f'批次数量: {len(sampler)}')
+    print(f"批次大小: {sampler.batch_size}")
+    print(f"类别数量: {sampler.n_classes}")
+    print(f"每个类别的样本数: {sampler.samples_per_class}")
+    for label, indices in sampler.class_indices.items():
+        print(f"类别 {label}: 共有 {len(indices)} 个样本")
+    print("---------------------------\n")
+
+
+class CrossValidator:
+    """K折交叉验证管理器"""
+
+    def __init__(self, dataset, config):
+        self.dataset = dataset
+        self.cfg_cv = config.cross_validation
+        self.cfg_train = config.training
+
+        # 提取并缓存所有标签
+        self.all_labels = np.array([label for _, label in dataset])
+
+        # 打印数据集统计
+        counts = Counter(self.all_labels)
+        total = len(self.all_labels)
+
+        print("\n------- 数据集类别分布 -------")
+        for label, count in sorted(counts.items()):
+            print(f"类别 {label}: {count}个样本 ({count / total * 100:.2f}%)")
+        print("----------------------------\n")
+
+        # 初始化分层K折
+        self.skf = StratifiedKFold(
+            n_splits = self.cfg_cv["n_splits"],
+            shuffle = self.cfg_cv["shuffle"],
+            random_state = self.cfg_train["random_seed"]
+        )
+
+        # 预计算所有分割，避免重复计算
+        self.splits = list(self.skf.split(np.zeros(len(self.all_labels)), self.all_labels))
+
+
+    def get_folds(self, train_transforms=None, val_transforms=None):
+        """
+       生成交叉验证的折，并应用适当的变换
+       参数:
+           train_transforms: 训练集使用的变换
+           val_transforms: 验证集使用的变换
+        """
+        for fold, (train_idx, val_idx) in enumerate(self.splits):
+            # 获取当前折的标签数据
+            train_labels = self.all_labels[train_idx]
+            val_labels = self.all_labels[val_idx]
+
+            # 创建包含变换的训练集和验证集
+            train_ds = TransformDataset(Subset(self.dataset, train_idx), train_transforms)
+            val_ds = TransformDataset(Subset(self.dataset, val_idx), val_transforms)
+
+            # 打印当前折的类别分布
+            _print_fold_stats(fold, train_labels, val_labels)
+
+            # 创建平衡采样器，传递预计算的标签
+            sampler = BalancedBatchSampler(
+                train_ds,
+                self.cfg_train["batch_size"],
+                labels = train_labels,
+                indices = train_idx
+            )
+
+            # 打印批次采样配置
+            _print_sampler_stats(sampler)
+
+            # 创建数据加载器
+            train_loader = DataLoader(
+                train_ds,
+                batch_sampler = sampler,
+                num_workers = self.cfg_train["num_workers"],
+                pin_memory = True,
+                persistent_workers = bool(self.cfg_train["num_workers"] > 0)
+            )
+
+            val_loader = DataLoader(
+                val_ds,
+                batch_size = self.cfg_train["batch_size"],
+                num_workers = self.cfg_train["num_workers"],
+                pin_memory = True,
+                persistent_workers = bool(self.cfg_train["num_workers"] > 0)
+            )
+
+            # 获取训练集标签分布
+            train_counter = Counter(train_labels)
+
+            yield fold, train_loader, val_loader, train_counter
+

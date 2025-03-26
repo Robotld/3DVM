@@ -22,6 +22,7 @@ class FocalLoss(nn.Module):
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
         return focal_loss.mean()
 
+
 class Enhanced3DVITLoss(nn.Module):
     def __init__(self,
                  cls_weight=1.0,
@@ -163,6 +164,8 @@ class Enhanced3DVITLoss(nn.Module):
 边界流场损失模块
 用于增强3D结节浸润性判断的边界流场特征学习
 """
+
+
 class BoundaryFlowLoss(nn.Module):
     """
     简化的边界流场损失

@@ -1,2 +1,3 @@
-!src/train_output/best
 src/train_output/*
+!src/train_output/best
+

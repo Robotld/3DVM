@@ -117,7 +117,7 @@ class RecurrenceDataset(Dataset):
                 recurrence = 1 if row['有无复发'] == '有' else 0
                 ct_label_map[ct_number] = recurrence
 
-        print(ct_label_map)
+        # print(ct_label_map)
         # 确保root_dirs是列表
         if isinstance(root_dirs, str):
             root_dirs = [root_dirs]

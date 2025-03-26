@@ -51,12 +51,10 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
     optimizer = getattr(optim, config.optimizer["name"])(
         model.parameters(), **config.get_optimizer_params(model)
     )
-
     # 初始化基础学习率调度器
     base_scheduler = getattr(optim.lr_scheduler, config.scheduler["name"])(
         optimizer, **config.get_scheduler_params()
     )
-
     # 包装预热调度器
     scheduler = WarmupScheduler(
         optimizer,
@@ -68,13 +66,6 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
     print(f"启用学习率预热: {warmup_epochs} 个epoch, 类型: {warmup_type}")
     print(f"启用梯度裁剪，最大范数: {max_grad_norm}")
 
-    # 打印训练集中每个类的数量
-    print(f"\n------- 第 {fold + 1} 折训练集类别数量 -------")
-    for cls, count in train_loader.dataset._data_counter.items() if hasattr(train_loader.dataset,
-                                                                            '_data_counter') else []:
-        print(f"类别 {cls}: {count} 个样本")
-    print("-----------------------------------\n")
-
     # 损失函数
     # loss_fn = FocalLoss()
     loss = build_loss(args.loss1, "CrossEntropyLoss", config) if args.loss1 else build_loss(args.loss2, "FocalLoss", config)
@@ -84,9 +75,14 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
     print("启用损失函数：", loss, loss3)
 
     # 初始化混合精度训练
-    scaler = amp.GradScaler()
     use_amp = device.type == 'cuda' and config.training["use_amp"]
     if use_amp:
+        scaler = torch.cuda.amp.GradScaler(
+            init_scale = 2. ** 16,  # 初始缩放因子
+            growth_factor = 2.0,  # 成功更新后的增长率
+            backoff_factor = 0.5,  # 梯度溢出时的回退因子
+            growth_interval = 2000  # 连续成功更新多少次后增长缩放因子
+        )
         print("启用混合精度训练")
 
     # 初始化最优指标
@@ -103,9 +99,11 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
     # 缓存验证集，优化评估过程
     print("缓存验证数据到GPU内存以加速评估...")
     val_data_cached = []
-    for x, y in tqdm(val_loader, desc="缓存验证数据"):
+    for x, y in tqdm(val_loader, desc="缓存验证数据", position=0):
         val_data_cached.append((x.to(device), y.to(device)))
     val_loader_cached = val_data_cached
+
+
 
     for epoch in range(args.epochs):
         start_time = time.time()
@@ -122,8 +120,8 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
             loss3_weight = args.loss3_weight,
             device=device,
             train=True,
-            use_amp=use_amp,
             scaler=scaler,
+            use_amp=use_amp,
             max_grad_norm=max_grad_norm
         )
         train_metrics_history.append(train_metrics)
@@ -136,8 +134,8 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
             loss_fn=loss,
             loss2=loss2,
             loss3=loss3,
-            loss1_weight = args.loss1_weight,
-            loss3_weight = args.loss3_weight,
+            loss1_weight=args.loss1_weight,
+            loss3_weight=args.loss3_weight,
             device=device,
             train=False,
             use_amp=use_amp,
@@ -225,10 +223,8 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
 def main():
     # 记录开始时间
     start_time = time.time()
-
-
     # 加载配置
-    config = ConfigManager('config/config.yaml')
+    config = ConfigManager('config/config_relapse.yaml')
 
     # 解析命令行参数
     args = parse_args(config)
@@ -304,13 +300,14 @@ def main():
         # 加载预训练权重
         if args.pretrained_path:
             print(f"Loading pretrained weights from {args.pretrained_path}...")
-            try:
-                if os.path.isdir(args.pretrained_path):
-                    model.load_pretrained_dino(args.pretrained_path)
-                else:
-                    model.load_state_dict(args.pretrained_path)
-            except Exception as e:
-                print(f"加载预训练权重出错: {str(e)}")
+            # try:
+            if os.path.isdir(args.pretrained_path):
+                model.load_pretrained_dino(args.pretrained_path)
+            else:
+                model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
+                print(f"成功加载权重: {args.pretrained_path}")
+            # except Exception as e:
+            #     print(f"加载预训练权重出错: {str(e)}")
 
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

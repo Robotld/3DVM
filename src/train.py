@@ -7,17 +7,17 @@ import time
 import numpy as np
 import torch
 import torch.cuda.amp as amp  # 添加混合精度训练
-from ruamel.yaml import YAML
 from torch import optim
 from tqdm import tqdm
 from models import WarmupScheduler
+
 
 # 导入自定义模块
 from models import create_transforms
 from models import CrossValidator
 from models import ViT3D
-from models import NoduleDataset, RecurrenceDataset
-from models import FocalLoss, Enhanced3DVITLoss, BoundaryFlowLoss, build_loss
+from models import NoduleDataset
+from models import build_loss
 from one_epoch_train import one_epoch_train
 from utils import save_training_history, update_config_from_args, parse_args, save_config, ConfigManager
 
@@ -84,9 +84,14 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
     print("启用损失函数：", loss, loss3)
 
     # 初始化混合精度训练
-    scaler = amp.GradScaler()
     use_amp = device.type == 'cuda' and config.training["use_amp"]
     if use_amp:
+        scaler = torch.cuda.amp.GradScaler(
+            init_scale = 2. ** 16,  # 初始缩放因子
+            growth_factor = 2.0,  # 成功更新后的增长率
+            backoff_factor = 0.5,  # 梯度溢出时的回退因子
+            growth_interval = 2000  # 连续成功更新多少次后增长缩放因子
+        )
         print("启用混合精度训练")
 
     # 初始化最优指标
@@ -122,8 +127,8 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
             loss3_weight = args.loss3_weight,
             device=device,
             train=True,
+            scaler = scaler,
             use_amp=use_amp,
-            scaler=scaler,
             max_grad_norm=max_grad_norm
         )
         train_metrics_history.append(train_metrics)
@@ -140,8 +145,8 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
             loss3_weight = args.loss3_weight,
             device=device,
             train=False,
+            scaler = scaler,
             use_amp=use_amp,
-            scaler=scaler,
             max_grad_norm=max_grad_norm
         )
         val_metrics_history.append(val_metrics)
@@ -221,6 +226,7 @@ def train_model(model, train_loader, val_loader, config, fold, device, args,
 
     # 返回最佳指标
     return best_val_f1, best_val_auc
+
 
 def main():
     # 记录开始时间
@@ -341,6 +347,7 @@ def main():
     hours, remainder = divmod(total_time, 3600)
     minutes, seconds = divmod(remainder, 60)
     print(f"\n总运行时间: {int(hours)}小时 {int(minutes)}分钟 {seconds:.2f}秒")
+
 
 if __name__ == '__main__':
     main()

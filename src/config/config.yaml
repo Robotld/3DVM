@@ -15,7 +15,7 @@ model:
     depth: 12
     heads: 12
     mlp_dim: 256
-    pool: 'max' # mean max all
+    pool: 'mean' # mean max all
 
 training:
   device: "cuda"
@@ -23,7 +23,7 @@ training:
   batch_size: 32
   num_epochs: 30
   num_workers: 2
-  use_amp: False   # 当输出值特别大或者特别小时，  会影响softmax结果，导致概率之和不为1。
+  use_amp: True
   cache_dataset: True
   warmup_epochs: 3
   warmup_type: "linear"

@@ -4,9 +4,11 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from tqdm import tqdm
 
 
-def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss1_weight=1.0, loss2=None, loss3=None, loss3_weight=0.5,
-                    train=True, use_amp=False, scaler=None, max_grad_norm=1.0):
-    """执行一个epoch的训练或验证"""
+def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
+                    loss1_weight=1.0, loss2=None, loss3=None, loss3_weight=0.5,
+                    train=True, use_amp=True, scaler=None, max_grad_norm=1.0):
+    """执行一个epoch的训练或验证，支持AMP"""
+
     # 设置模型状态
     model.train() if train else model.eval()
 
@@ -34,21 +36,24 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss1_weight
                 optimizer.zero_grad(set_to_none=True)
 
                 if use_amp:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast(device_type = 'cuda', enabled = True):
                         outputs, loss, flow_info = forward_pass(x)
-
+                    # 缩放损失并反向传播
                     scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    if max_grad_norm > 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    # 执行优化步骤
                     scaler.step(optimizer)
                     scaler.update()
                 else:
                     outputs, loss, flow_info = forward_pass(x)
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    if max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     optimizer.step()
             else:
-                outputs, loss, flow_info = forward_pass(x)
+                    outputs, loss, flow_info = forward_pass(x)
 
             # 记录流场损失
             if loss3 and 'total_flow_loss' in flow_info:
@@ -75,8 +80,7 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss1_weight
         'loss': np.mean(losses)
     }
 
-    # 添加流场损失指标
-    if loss3 is not None and flow_losses:
+    if flow_losses:
         metrics['flow_loss'] = np.mean(flow_losses)
 
     # 计算AUC
@@ -87,11 +91,11 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device, loss1_weight
         metrics["auc"] = roc_auc_score(all_labels, all_probs[:, 1])
 
     # 计算每类准确率
-    unique_classes = np.unique(all_labels)
     metrics['per_class_accuracy'] = {
         cls: np.mean(all_preds[all_labels == cls] == cls)
-        for cls in unique_classes
+        for cls in np.unique(all_labels)
     }
+    # 保存预测结果
     metrics['predictions'] = all_preds
     metrics['labels'] = all_labels
     metrics['probabilities'] = all_probs
