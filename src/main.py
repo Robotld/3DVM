@@ -99,7 +99,7 @@ def main():
             if os.path.isdir(args.pretrained_path):
                 model.load_pretrained_dino(args.pretrained_path)
             else:
-                model.load_state_dict(torch.load(args.pretrained_path, map_location = device))
+                model.load_state_dict(torch.load(args.pretrained_path, map_location=device), strict=False)
                 print(f"成功加载权重: {args.pretrained_path}")
             # except Exception as e:
             #     print(f"加载预训练权重出错: {str(e)}")

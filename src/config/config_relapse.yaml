@@ -31,7 +31,7 @@ training:
   max_grad_norm: 1.0
   crop_size: 36
   augment: true
-  pretrained_path: "E:/workplace/3D/src/train_output/train_20250326_212618/best_f1_model.pth"
+  pretrained_path: 'E:\workplace\3D\src\train_output\train_20250327_094426\best_f1_model.pth'
 losses:
   CrossEntropyLoss:
     enabled: true
