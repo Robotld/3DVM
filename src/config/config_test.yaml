@@ -9,18 +9,18 @@ data:
 
 model:
   params:
-    image_size: 96 # 96 * 96 * 96
+    image_size: 96
     patch_size: 6
-    dim: 384
-    depth: 6
+    dim: 768
+    depth: 12
     heads: 12
     mlp_dim: 256
-    pool: 'max' # mean max all
+    pool: max
 
 training:
   device: "cuda"
   random_seed: 42
-  batch_size: 64
+  batch_size: 32
   num_epochs: 30
   num_workers: 2
   use_amp: False   # 当输出值特别大或者特别小时，  会影响softmax结果，导致概率之和不为1。
@@ -30,10 +30,24 @@ training:
   max_grad_norm: 1.0
   crop_size: 36
   augment: False
-  pretrained_path: 'E:\workplace\3D\src\train_output\train_20\best_auc_model_fold_4.pth'
-  loss:
-    smoothing: 0.1
-    class_weights: "auto"
+  pretrained_path: 'E:\workplace\3D\src\train_output\train_20250326_114226\best_f1_model_fold_4.pth'
+losses:
+  CrossEntropyLoss:
+    enabled: true
+    weight: 1.0
+    params: #{} # 如果 CrossEntropyLoss无需参数  但为了保持一致，以及不报错， 这里需要用空字典占位
+  FocalLoss:
+    enabled: false  # enabled false 表示 默认不启用
+    weight: 0.5
+    params:
+      gamma: 2.0
+      alpha: 0.25
+  BoundaryFlowLoss:
+    enabled: True
+    weight: 0.5
+    params:
+      weight: 0.5
+      margin: 0.5
 
 cross_validation:
   n_splits: 5
@@ -42,7 +56,7 @@ cross_validation:
 optimizer:
   name: "AdamW"
   params:
-    lr: 0.00005
+    lr: 0.00002
     weight_decay: 0.05
 
 scheduler:

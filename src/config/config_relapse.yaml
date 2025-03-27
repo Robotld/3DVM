@@ -8,60 +8,57 @@ data:
   output_dir: 'Relapse_train_output'
 #  class_names: ['低分化', '中分化', '高分化', '微浸润', '原位癌']
   class_names: ['Invasive', 'Non-invasive']
+
 model:
   params:
-    image_size: 96 # 96 * 96 * 96
+    image_size: 96
     patch_size: 6
     dim: 384
     depth: 6
     heads: 6
     mlp_dim: 256
-    pool: 'mean' # mean max all
-
+    pool: mean
 training:
-  device: "cuda"
+  device: cuda
   random_seed: 42
-  batch_size: 32
+  batch_size: 64
   num_epochs: 30
-  num_workers: 2
-  use_amp: True   # 当输出值特别大或者特别小时，  会影响softmax结果，导致概率之和不为1。
-  cache_dataset: True
+  num_workers: 4
+  use_amp: true
+  cache_dataset: true
   warmup_epochs: 3
-  warmup_type: "linear"
+  warmup_type: linear
   max_grad_norm: 1.0
   crop_size: 36
-  augment: True
-  pretrained_path: 'E:\workplace\3D\src\train_output\train_18\best_auc_model_fold_4.pth'
+  augment: true
+  pretrained_path: "E:/workplace/3D/src/train_output/train_20250326_212618/best_f1_model.pth"
 losses:
   CrossEntropyLoss:
     enabled: true
     weight: 1.0
-    params: #{} # 如果 CrossEntropyLoss无需参数  但为了保持一致，以及不报错， 这里需要用空字典占位
+    params:
   FocalLoss:
-    enabled: false  # enabled false 表示 默认不启用
+    enabled: false
     weight: 0.5
     params:
       gamma: 2.0
       alpha: 0.25
   BoundaryFlowLoss:
-    enabled: false
-    weight: 0.3
+    enabled: true
+    weight: 0.5
     params:
       weight: 0.5
       margin: 0.5
-
 cross_validation:
   n_splits: 5
   shuffle: true
-
 optimizer:
-  name: "AdamW"
+  name: AdamW
   params:
-    lr: 0.00001
+    lr: 0.00002
     weight_decay: 0.05
-
 scheduler:
-  name: "CosineAnnealingLR"
+  name: CosineAnnealingLR
   params:
     T_max: 30
     eta_min: 5e-7

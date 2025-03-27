@@ -11,9 +11,11 @@ def parse_args(config):
                         help = 'Override data directory in config')
     parser.add_argument('--output_dir', type = str, nargs = '+', default = config.data["output_dir"],
                         help = 'train output dir')
+    parser.add_argument('--class_names', type = str, nargs = '+', default = config.data['class_names'],
+                        help = 'class name')
     parser.add_argument('--batch_size', type = int, default = config.training["batch_size"],
                         help = 'Override batch size in config')
-    parser.add_argument('--use_amp', action = 'store_true', default = config.training["use_amp"],
+    parser.add_argument('--use_amp', type = bool, default = config.training["use_amp"],
                         help = 'Use automatic mixed precision training')
     parser.add_argument('--cache_dataset', action = 'store_true', default = config.training["cache_dataset"],
                         help = 'Cache entire dataset in memory (speeds up training but uses more RAM)')

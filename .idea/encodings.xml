@@ -2,8 +2,8 @@
 <project version="4">
   <component name="Encoding">
     <file url="file://$PROJECT_DIR$/src/test_result/test/test_report.txt" charset="GBK" />
-    <file url="file://$PROJECT_DIR$/src/test_result/test/test_report.txt" charset="GBK" />
     <file url="file://$PROJECT_DIR$/src/test_result/test1/test_report.txt" charset="GBK" />
-    <file url="file://$PROJECT_DIR$/src/test_result/test1/test_report.txt" charset="GBK" />
+    <file url="file://$PROJECT_DIR$/src/train_output/train_20250326_224053/cv_results.txt" charset="GBK" />
+    <file url="file://$PROJECT_DIR$/src/train_output/train_20250326_224153/cv_results.txt" charset="GBK" />
   </component>
 </project>

@@ -14,7 +14,7 @@ class ViT3D(VisionTransformer):
                  depth=4,
                  heads=8,
                  mlp_dim=512,
-                 dropout=0.2,
+                 dropout=0.5,
                  emb_dropout=0.1,
                  patch_size=16,
                  image_size=96,
@@ -22,8 +22,8 @@ class ViT3D(VisionTransformer):
                  in_chans=1,
                  pool='max',
                  use_3d_pos_embed=False):
-        super().__init__(img_size=image_size, patch_size=patch_size, in_chans=in_chans,
-                         num_classes=num_classes, embed_dim=dim, depth=depth, num_heads=heads)
+        super().__init__(img_size = image_size, patch_size = patch_size, in_chans = in_chans,
+                         num_classes = num_classes, embed_dim = dim, depth = depth, num_heads = heads)
 
         self.pool = pool
         self.use_3d_pos_embed = use_3d_pos_embed
@@ -38,8 +38,8 @@ class ViT3D(VisionTransformer):
 
         # 创建3D补丁嵌入
         self.patch_embedding = nn.Conv3d(in_chans, dim,
-                                         kernel_size=patch_size_3d,
-                                         stride=patch_size_3d)
+                                         kernel_size = patch_size_3d,
+                                         stride = patch_size_3d)
 
         # 保留原始位置编码用于备选
         self.orig_pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
@@ -48,47 +48,20 @@ class ViT3D(VisionTransformer):
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         self.dropout = nn.Dropout(emb_dropout)
 
-        # 如果使用3D位置编码，则添加位置编码生成器
-        if use_3d_pos_embed:
-            pos_dim = dim // 3
-            # 深度位置编码器
-            self.pos_d_encoding = nn.Sequential(
-                nn.Linear(1, pos_dim),
-                nn.LayerNorm(pos_dim),
-                nn.GELU(),
-                nn.Linear(pos_dim, pos_dim)
-            )
-
-            # 高度位置编码器
-            self.pos_h_encoding = nn.Sequential(
-                nn.Linear(1, pos_dim),
-                nn.LayerNorm(pos_dim),
-                nn.GELU(),
-                nn.Linear(pos_dim, pos_dim)
-            )
-
-            # 宽度位置编码器
-            self.pos_w_encoding = nn.Sequential(
-                nn.Linear(1, pos_dim),
-                nn.LayerNorm(pos_dim),
-                nn.GELU(),
-                nn.Linear(pos_dim, pos_dim)
-            )
-
-            # 类别令牌位置编码
-            self.cls_pos_embed = nn.Parameter(torch.randn(1, 1, dim))
+        # 类别令牌位置编码
+        self.cls_pos_embed = nn.Parameter(torch.randn(1, 1, dim))
 
         # 创建Transformer编码器
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=dim,
-            nhead=heads,
-            dim_feedforward=mlp_dim,
-            dropout=dropout,
-            batch_first=True
+            d_model = dim,
+            nhead = heads,
+            dim_feedforward = mlp_dim,
+            dropout = dropout,
+            batch_first = True
         )
         self.transformer = nn.TransformerEncoder(
             encoder_layer,
-            num_layers=depth
+            num_layers = depth
         )
 
         # 根据池化方法确定MLP输入维度
@@ -112,103 +85,6 @@ class ViT3D(VisionTransformer):
         # 保存注意力权重用于可视化
         self.attention_weights = None
 
-    # 添加到ViT3D类中
-    def extract_intermediate_features(self, x):
-        """
-        提取中间层特征用于流场分析
-
-        参数:
-            x: 输入张量
-
-        返回:
-            中间特征列表和最终特征
-        """
-        batch_size = x.shape[0]
-
-        # 生成3D补丁嵌入
-        x = self.patch_embedding(x)
-
-        # 保存补丁嵌入特征
-        patch_features = x.clone()
-
-        # 获取实际补丁数量
-        d_patches = x.shape[2]
-        h_patches = x.shape[3]
-        w_patches = x.shape[4]
-
-        # 展平补丁并转置为序列形式
-        x = x.flatten(2).transpose(1, 2)
-
-        # 添加分类令牌
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
-
-        # 添加位置编码
-        if self.use_3d_pos_embed:
-            patch_pos_embed = self.generate_3d_positional_embedding(
-                d_patches, h_patches, w_patches, self.embed_dim
-            )
-            pos_embed = torch.cat([self.cls_pos_embed, patch_pos_embed], dim=1)
-            x = x + pos_embed
-        else:
-            x = x + self.orig_pos_embedding
-
-        # 存储中间特征
-        intermediate_features = []
-
-        # 通过Transformer层
-        for i, block in enumerate(self.blocks):
-            x = block(x)
-            # 每隔几层保存一次特征
-            if i % 2 == 0 or i == len(self.blocks) - 1:
-                # 提取只包含补丁的特征(排除CLS token)
-                patch_tokens = x[:, 1:].clone()
-                # 重塑回3D体积形状用于流场分析
-                reshaped = patch_tokens.transpose(1, 2).reshape(
-                    batch_size, self.embed_dim, d_patches, h_patches, w_patches
-                )
-                intermediate_features.append(reshaped)
-
-        return intermediate_features, x
-    def generate_3d_positional_embedding(self, d, h, w, dim):
-        """
-        生成3D感知的位置编码
-        参数:
-            d: 深度维度补丁数
-            h: 高度维度补丁数
-            w: 宽度维度补丁数
-            dim: 编码维度
-        返回:
-            形状为(1, d*h*w, dim)的位置编码张量
-        """
-        # 生成归一化的坐标
-        d_pos = torch.arange(d).float().unsqueeze(1).unsqueeze(1) / d
-        h_pos = torch.arange(h).float().unsqueeze(1).unsqueeze(0) / h
-        w_pos = torch.arange(w).float().unsqueeze(0).unsqueeze(0) / w
-
-        # 转换为设备匹配的张量
-        device = next(self.parameters()).device
-        d_pos = d_pos.to(device)
-        h_pos = h_pos.to(device)
-        w_pos = w_pos.to(device)
-
-        # 编码每个维度
-        pos_d = self.pos_d_encoding(d_pos.reshape(-1, 1)).reshape(d, 1, 1, dim // 3)
-        pos_h = self.pos_h_encoding(h_pos.reshape(-1, 1)).reshape(1, h, 1, dim // 3)
-        pos_w = self.pos_w_encoding(w_pos.reshape(-1, 1)).reshape(1, 1, w, dim // 3)
-
-        # 结合三维位置信息
-        pos_embedding = torch.cat([
-            pos_d.expand(-1, h, w, -1),  # 扩展到所有位置
-            pos_h.expand(d, -1, w, -1),
-            pos_w.expand(d, h, -1, -1)
-        ], dim=-1)  # 将三个维度的编码拼接
-
-        # 将形状从(d, h, w, dim)转为(1, d*h*w, dim)
-        pos_embedding = pos_embedding.reshape(1, d * h * w, dim)
-
-        return pos_embedding
-
     def forward(self, x):
         """
         前向传播
@@ -217,11 +93,8 @@ class ViT3D(VisionTransformer):
             output_attention: 是否返回注意力权重用于可视化
         """
 
-
         x = x.float()
         batch_size = x.shape[0]
-        input_shape = x.shape
-
         # 生成3D补丁嵌入
         x = self.patch_embedding(x)  # (batch_size, dim, d', h', w')
 
@@ -236,7 +109,7 @@ class ViT3D(VisionTransformer):
 
         # 添加分类令牌
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+        x = torch.cat((cls_tokens, x), dim = 1)
 
         # 添加位置编码
         if self.use_3d_pos_embed:
@@ -249,12 +122,12 @@ class ViT3D(VisionTransformer):
                 # 如果不匹配，使用插值调整大小
                 patch_pos_embed = nn.functional.interpolate(
                     patch_pos_embed.transpose(1, 2),
-                    size=actual_patches,
-                    mode='linear'
+                    size = actual_patches,
+                    mode = 'linear'
                 ).transpose(1, 2)
 
             # 拼接类别令牌位置编码
-            pos_embed = torch.cat([self.cls_pos_embed, patch_pos_embed], dim=1)
+            pos_embed = torch.cat([self.cls_pos_embed, patch_pos_embed], dim = 1)
             # 添加位置编码
             x = x + pos_embed
         else:
@@ -287,11 +160,11 @@ class ViT3D(VisionTransformer):
         features = x
         # 根据池化方法聚合特征
         if self.pool == 'mean':
-            pooled_patches = torch.mean(patch_tokens, dim=1)
-            combined_features = torch.cat([cls_token_out, pooled_patches], dim=1)
+            pooled_patches = torch.mean(patch_tokens, dim = 1)
+            combined_features = torch.cat([cls_token_out, pooled_patches], dim = 1)
         elif self.pool == 'max':
-            pooled_patches = torch.max(patch_tokens, dim=1)[0]
-            combined_features = torch.cat([cls_token_out, pooled_patches], dim=1)
+            pooled_patches = torch.max(patch_tokens, dim = 1)[0]
+            combined_features = torch.cat([cls_token_out, pooled_patches], dim = 1)
         else:  # pool == 'all'
             combined_features = x.reshape(batch_size, -1)
 
@@ -304,10 +177,13 @@ class ViT3D(VisionTransformer):
         try:
             basic_model = Dinov2ForImageClassification.from_pretrained(
                 path,
-                num_labels=self.num_classes,
-                ignore_mismatched_sizes=True
+                num_labels = self.num_classes,
+                ignore_mismatched_sizes = True
             )
-            self.load_state_dict(basic_model.state_dict(), strict=False)
+            self.load_state_dict(basic_model.state_dict(), strict = False)
+            # 对于加载的预训练模型，直接把CSL随机初始化。
+            print("随机初始化CLStoken")
+            self.cls_token = nn.Parameter(torch.randn(1, 1, self.embed_dim))
             print("成功加载DINOv2预训练权重")
         except Exception as e:
             print(f"加载预训练权重失败: {str(e)}")

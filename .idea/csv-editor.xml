@@ -45,6 +45,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\src\train_output\best\train_20\training_history_fold_4.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\src\train_output\train_1\training_history_fold_0.csv">
           <value>
             <Attribute>

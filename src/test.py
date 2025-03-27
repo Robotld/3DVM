@@ -2,11 +2,8 @@
 测试脚本
 负责加载预训练模型并在测试集上进行评估
 """
-import argparse
-import time
 import os
-from collections import Counter
-
+import time
 import numpy as np
 import torch
 from ruamel.yaml import YAML
@@ -18,22 +15,7 @@ from sklearn.preprocessing import normalize
 from models import create_transforms
 from models import ViT3D
 from models import NoduleDataset
-
-
-class ConfigManager:
-    def __init__(self, config_path):
-        yaml = YAML()
-        with open(config_path, "r", encoding='utf-8') as f:
-            self.config = yaml.load(f)
-
-        # 处理设备配置
-        self.config["training"]["device"] = torch.device(
-            "cuda" if torch.cuda.is_available() and self.config["training"]["device"] == "cuda"
-            else "cpu"
-        )
-
-    def __getattr__(self, name):
-        return self.config.get(name)
+from utils import parse_args, ConfigManager
 
 
 def test_model(model, test_loader, device, class_names=None):
@@ -109,56 +91,6 @@ def test_model(model, test_loader, device, class_names=None):
     return results
 
 
-def parse_args(config):
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='config/config.yaml',
-                        help='Path to config file')
-    parser.add_argument('--data_dir', type=str, nargs='+', default=config.data["root_dirs"],
-                        help='Override data directory in config')
-    parser.add_argument('--output_dir', type=str, default=config.data['output_dir'],
-                        help='result output dir')
-    parser.add_argument('--class_names', type=str, nargs='+', default=config.data['class_names'],
-                        help='class name')
-    parser.add_argument('--batch_size', type=int, default=config.training["batch_size"],
-                        help='Override batch size in config')
-    parser.add_argument('--use_amp', action='store_true', default=config.training["use_amp"],
-                        help='Use automatic mixed precision training')
-    parser.add_argument('--cache_dataset', action='store_true', default=config.training["cache_dataset"],
-                        help='Cache entire dataset in memory (speeds up training but uses more RAM)')
-    parser.add_argument('--cache_dir', type=str, default=None,
-                        help='Directory for caching dataset on disk (using PersistentDataset)')
-    parser.add_argument('--warmup_epochs', type=int, default=config.training["warmup_epochs"],
-                        help='Number of warmup epochs')
-    parser.add_argument('--warmup_type', type=str, default=config.training["warmup_type"],
-                        choices=['linear', 'exponential'],
-                        help='Type of learning rate warmup')
-    parser.add_argument('--max_grad_norm', type=float, default=config.training["max_grad_norm"],
-                        help='Maximum gradient norm for clipping')
-    parser.add_argument('--crop_size', type=int, default=config.training["crop_size"],
-                        help='Apply center cropping with size format "DxHxW", e.g. "64x64x64"')
-    parser.add_argument('--augment', action='store_true', default=config.training["augment"],
-                        help='Apply medical image augmentation')
-    parser.add_argument('--image_size', type=int, default=config.model['params']["image_size"],
-                        help='3D input image size')
-    parser.add_argument('--num_classes', type=int, default=config.data['num_classes'],
-                        help='num_classes')
-    parser.add_argument('--pretrained_path', type=str, default=config.training['pretrained_path'],
-                        help='pretrained_path')
-    parser.add_argument('--lr', type=float, default=config.optimizer['params']['lr'],
-                        help='learning rate')
-    parser.add_argument('--patch_size', type=int, default=config.model['params']["patch_size"],
-                        help='patch size')
-    parser.add_argument('--dim', type=int, default=config.model['params']["dim"],
-                        help='embed dim')
-    parser.add_argument('--depth', type=int, default=config.model['params']["depth"],
-                        help='VIT encoder layer number')
-    parser.add_argument('--heads', type=int, default=config.model['params']["heads"],
-                        help='VIT encoder head number')
-    parser.add_argument('--pool', type=str, default=config.model['params']["pool"],
-                        help='pool: max min all')
-    return parser.parse_args()
-
-
 def main():
     # 记录开始时间
     start_time = time.time()
@@ -200,14 +132,10 @@ def main():
         pin_memory=True
     )
 
-    # 配置模型参数
-    if args.crop_size:
-        config.model["params"]["image_size"] = args.crop_size
-        args.image_size = args.crop_size
-
     model_config = {
-        "num_classes": args.num_classes,
+        "num_classes": config.data["num_classes"],
         "image_size": args.image_size,
+        "crop_size": args.crop_size,
         "patch_size": args.patch_size,
         "dim": args.dim,
         "depth": args.depth,

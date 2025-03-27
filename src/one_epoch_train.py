@@ -1,3 +1,6 @@
+"""
+单次训练或验证
+"""
 import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
@@ -14,7 +17,11 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
 
     losses, all_preds, all_labels, all_probs = [], [], [], []
     flow_losses = []
-    data_iter = tqdm(data_loader, desc="训练中" if train else "验证中", leave=False, position=0)
+    data_iter = tqdm(data_loader,
+                     desc = "训练中" if train else "验证中",
+                     leave = False,  # 完成后删除进度条
+                     ncols = 100,  # 固定宽度
+                     mininterval = 0.01)  # 最小更新间隔时间
 
     # 定义前向传播和损失计算函数
     def forward_pass(inputs):
@@ -67,7 +74,8 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
             all_preds.extend(preds.detach().cpu().numpy())
             all_labels.extend(y.detach().cpu().numpy())
             all_probs.extend(probs.detach().cpu().numpy())
-
+        # 关闭进度条
+        data_iter.close()
     # 转换为NumPy数组以计算指标
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
