@@ -21,7 +21,7 @@ training:
   device: "cuda"
   random_seed: 42
   batch_size: 32
-  num_epochs: 30
+  num_epochs: 20
   num_workers: 4
   use_amp: False
   cache_dataset: True
@@ -63,5 +63,5 @@ optimizer:
 scheduler:
   name: "CosineAnnealingLR"
   params:
-    T_max: 30
+    T_max: 20
     eta_min: 5e-7

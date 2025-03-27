@@ -96,7 +96,7 @@ def main():
         print(f'\nTraining Fold {fold + 1}')
 
         # 初始化新的模型
-        model = ViT3D(**model_config).to(device)
+        model = ViT3D(**model_config)
         # 加载预训练权重
         if args.pretrained_path:
             print(f"Loading pretrained weights from {args.pretrained_path}...")
@@ -108,6 +108,9 @@ def main():
                 print(f"成功加载权重: {args.pretrained_path}")
             # except Exception as e:
             #     print(f"加载预训练权重出错: {str(e)}")
+            print("随机初始化CLStoken")
+            model.cls_token = torch.nn.Parameter(torch.randn(1, 1, model.embed_dim))
+        model.to(device)
 
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
