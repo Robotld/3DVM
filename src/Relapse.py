@@ -13,7 +13,7 @@ from models import CrossValidator
 from models import ViT3D
 from models import RecurrenceDataset
 
-from utils import update_config_from_args, parse_args, ConfigManager
+from utils import update_config_from_args, parse_args, ConfigManager, freeze_encoder_keep_prompts, set_seed
 from train import train
 
 
@@ -31,10 +31,12 @@ def main():
     torch.manual_seed(config.training["random_seed"])
     np.random.seed(config.training["random_seed"])
 
+    set_seed()
+
     # 优化CUDA性能
     if torch.cuda.is_available():
         # 设置GPU优先模式为性能优先
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = False
         # 确定性算法提高一致性
         torch.backends.cudnn.deterministic = True
 
@@ -83,8 +85,6 @@ def main():
 
     # 进行交叉验证
     for fold, train_loader, val_loader, train_counter in cv.get_folds(train_transforms, val_transforms):
-        # if fold != 4:
-        #     continue
         # 记录每个fold的数据计数器，用于计算类别权重
         train_loader.dataset._data_counter = train_counter
 
@@ -112,13 +112,14 @@ def main():
             model.cls_token = torch.nn.Parameter(torch.randn(1, 1, model.embed_dim))
         model.to(device)
 
+        # freeze_encoder_keep_prompts(model)
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"模型总参数量: {total_params:,}")
         print(f"可训练参数量: {trainable_params:,}")
 
         # 训练模型
-        best_f1, best_auc = train(model=model,
+        best_f1, best_auc, _, _ = train(model=model,
                                   train_loader=train_loader,
                                   val_loader=val_loader,
                                   config=config,

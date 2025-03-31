@@ -1,8 +1,9 @@
 """
-类别原型增强视觉Transformer
+主程序
 负责模型训练、验证和性能评估的核心逻辑
 """
 import os
+import random
 import time
 import numpy as np
 import torch
@@ -12,7 +13,7 @@ from models import create_transforms
 from models import CrossValidator
 from models import ViT3D
 from models import NoduleDataset
-from utils import update_config_from_args, parse_args, ConfigManager
+from utils import update_config_from_args, parse_args, ConfigManager, set_seed, freeze_encoder_keep_prompts
 from train import train
 
 
@@ -28,8 +29,7 @@ def main():
     config = update_config_from_args(config, args)
 
     # 设置随机种子
-    torch.manual_seed(config.training["random_seed"])
-    np.random.seed(config.training["random_seed"])
+    set_seed()
 
     # 优化CUDA性能
     if torch.cuda.is_available():
@@ -106,7 +106,10 @@ def main():
             print("随机初始化CLStoken")
             model.cls_token = torch.nn.Parameter(torch.randn(1, 1, model.embed_dim))
         model.to(device)
-        # if args.frozen:
+
+        # 加载模型后，冻结encoder部分，只保留CLS token和类原型向量可训练
+
+        # freeze_encoder_keep_prompts(model)
 
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

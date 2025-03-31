@@ -94,7 +94,7 @@ def train(model, train_loader, val_loader, config, fold, device, args,
         start_time = time.time()
 
         # 训练阶段
-        train_loss, train_metrics = one_epoch_train(
+        train_loss, train_metrics, similarity_loss = one_epoch_train(
             model=model,
             data_loader=train_loader,
             optimizer=optimizer,
@@ -110,9 +110,9 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             max_grad_norm=max_grad_norm
         )
         train_metrics_history.append(train_metrics)
-
+        print(similarity_loss)
         # 验证阶段
-        val_loss, val_metrics = one_epoch_train(
+        val_loss, val_metrics, similarity_loss = one_epoch_train(
             model=model,
             data_loader=val_loader_cached,
             optimizer=optimizer,
@@ -127,6 +127,7 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             use_amp=use_amp,
             max_grad_norm=max_grad_norm
         )
+        # print(similarity_loss)
         val_metrics_history.append(val_metrics)
 
         # 计算当前学习率

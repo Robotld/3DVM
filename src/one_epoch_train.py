@@ -25,14 +25,15 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
 
     # 定义前向传播和损失计算函数
     def forward_pass(inputs):
-        model_outputs, features, flow = model(inputs)
-        loss_all = loss1_weight * loss_fn(model_outputs, y)
+        model_outputs, features, flow, _ = model(inputs)
+        loss_all = loss1_weight * loss_fn(model_outputs, y) + _
+        # print(similarity_loss)
         info = {}
         if loss3:
             flow_loss, info = loss3(features, y)
             loss_all += loss3_weight*flow_loss
 
-        return model_outputs, loss_all, info
+        return model_outputs, loss_all, info, _
 
     # 训练或验证循环
     with torch.set_grad_enabled(train):
@@ -44,7 +45,7 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
 
                 if use_amp:
                     with torch.amp.autocast(device_type = 'cuda', enabled = True):
-                        outputs, loss, flow_info = forward_pass(x)
+                        outputs, loss, flow_info, similarity_loss= forward_pass(x)
                     # 缩放损失并反向传播
                     scaler.scale(loss).backward()
                     if max_grad_norm > 0:
@@ -54,13 +55,13 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    outputs, loss, flow_info = forward_pass(x)
+                    outputs, loss, flow_info, similarity_loss = forward_pass(x)
                     loss.backward()
                     if max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     optimizer.step()
             else:
-                    outputs, loss, flow_info = forward_pass(x)
+                    outputs, loss, flow_info, similarity_loss = forward_pass(x)
 
             # 记录流场损失
             if loss3 and 'total_flow_loss' in flow_info:
@@ -108,4 +109,4 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
     metrics['labels'] = all_labels
     metrics['probabilities'] = all_probs
 
-    return np.mean(losses), metrics
+    return np.mean(losses), metrics, similarity_loss
