@@ -12,7 +12,7 @@ from models import create_transforms
 from models import CrossValidator
 from models import ViT3D
 from models import NoduleDataset
-from utils import update_config_from_args, parse_args, ConfigManager
+from utils import update_config_from_args, parse_args, ConfigManager, set_seed
 from train import train
 
 
@@ -27,9 +27,7 @@ def main():
     args = parse_args(config)
     config = update_config_from_args(config, args)
 
-    # 设置随机种子
-    torch.manual_seed(config.training["random_seed"])
-    np.random.seed(config.training["random_seed"])
+    set_seed()
 
     # 优化CUDA性能
     if torch.cuda.is_available():
