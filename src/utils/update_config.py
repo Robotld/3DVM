@@ -73,6 +73,7 @@ def update_config_from_args(config, args):
         "max_grad_norm": ["training", "max_grad_norm"],
         "crop_size": ["training", "crop_size"],
         "augment": ["training", "augment"],
+        "frozen": ["training", "frozen"],
         "image_size": ["model", "params", "image_size"],
         "num_classes": ["data", "num_classes"],
         "pretrained_path": ["training", "pretrained_path"],
@@ -82,12 +83,13 @@ def update_config_from_args(config, args):
         "depth": ["model", "params", "depth"],
         "heads": ["model", "params", "heads"],
         "pool": ["model", "params", "pool"],
+        "cpt_num": ["model", "params", "cpt_num"],
+        "mlp_num": ["model", "params", "mlp_num"],
         "loss1": ["losses", 'CrossEntropyLoss', 'enabled'],
-        "loss2": ["losses", 'FocalLoss', 'enabled'],
-        "loss3": ["losses", 'BoundaryFlowLoss', 'enabled'],
+        "loss2": ["losses", 'BoundaryFlowLoss', 'enabled'],
+        "loss3": ["losses", 'SimilarityLoss', 'enabled'],
         "--loss1_weight": ["losses", 'CrossEntropyLoss', 'weight'],
-        "--loss2_weight": ["losses", 'FocalLoss', 'weight'],
-        "--loss3_weight": ["losses", 'BoundaryFlowLoss', 'weight'],
+        "--loss2_weight": ["losses", 'BoundaryFlowLoss', 'weight'],
     }
 
     # 更新配置

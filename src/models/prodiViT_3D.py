@@ -21,7 +21,9 @@ class ViT3D(VisionTransformer):
                  image_size=96,
                  crop_size=36,
                  in_chans=1,
-                 pool='max'):
+                 pool='max',
+                 cpt_num=5,
+                 mlp_num=3):
         super().__init__(img_size = image_size, patch_size = patch_size, in_chans = in_chans,
                          num_classes = num_classes, embed_dim = dim, depth = depth, num_heads = heads)
 
@@ -48,8 +50,8 @@ class ViT3D(VisionTransformer):
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
         self.dropout = nn.Dropout(emb_dropout)
 
-        # 添加类别提示向量
-        self.class_prompts = nn.Parameter(torch.randn(1, num_classes, dim))
+        # 添加类原型向量
+        self.class_prompts = nn.Parameter(torch.randn(1, cpt_num, dim))
 
         # 创建Transformer编码器
         encoder_layer = nn.TransformerEncoderLayer(
@@ -71,42 +73,64 @@ class ViT3D(VisionTransformer):
             raise ValueError(f"不支持的池化方法: {pool}")
 
         # 创建MLP分类头
-        self.mlp_head = nn.Sequential(
-            # nn.Linear(mlp_input_dim, mlp_dim),
-            # nn.BatchNorm1d(mlp_dim),
-            # nn.Linear(mlp_dim, num_classes)
-            nn.Linear(mlp_input_dim, num_classes),
-            # nn.Sigmoid()
-        )
+        if mlp_num == 1:
+            self.mlp_head = nn.Sequential(
+                nn.Linear(mlp_input_dim, num_classes)
+            )
+        elif mlp_num == 2:
+            self.mlp_head = nn.Sequential(
+                nn.Linear(mlp_input_dim, mlp_dim),
+                nn.BatchNorm1d(mlp_dim),
+                nn.GELU(),
+                nn.Dropout(0.3),
+                nn.Linear(mlp_dim, num_classes)
+            )
+        else:
+            self.mlp_head = nn.Sequential(
+                nn.Linear(mlp_input_dim, mlp_dim),
+                nn.BatchNorm1d(mlp_dim),
+                nn.GELU(),
+                nn.Linear(mlp_dim, mlp_dim),
+                nn.BatchNorm1d(mlp_dim),
+                nn.GELU(),
+                nn.Linear(mlp_dim, num_classes)
+            )
 
         # 保存注意力权重用于可视化
         self.attention_weights = None
 
-    def prompt_cosine_similarity_loss(self, low=0.3, high=0.7):
+    def prompt_cosine_similarity_loss(self, low=0.4, high=0.8):
         """
-        计算 class_prompts 之间余弦相似性的软范围约束损失
-        :param low: 下限阈值（低于此数值，则提示过于不同）
-        :param high: 上限阈值（高于此数值，则提示过于相似）
+        批量计算 prompts (类提示向量）间的余弦相似性软范围约束损失
+        :param low: 下限阈值（低于此值提示过于不同）
+        :param high: 上限阈值（高于此值提示过于相似）
         :return: tensor loss
         """
-        prompts = self.class_prompts  # prompts shape: [num_classes, embed_dim]
+        prompts = self.class_prompts  # [batch_size, num_classes, embed_dim]
 
-        # 计算 prompts 之间逐对余弦相似度
+        batch_size, num_classes, embed_dim = prompts.shape
+
+        if num_classes < 2:
+            return torch.tensor(0.0, device=prompts.device, requires_grad=True)
+
+        # 批量计算 prompts 的相似度矩阵
         sim_matrix = F.cosine_similarity(
-            prompts.unsqueeze(1), prompts.unsqueeze(0), dim=-1
-        )  # [num_classes, num_classes]
+            prompts.unsqueeze(2),  # [batch_size, num_classes, 1, embed_dim]
+            prompts.unsqueeze(1),  # [batch_size, 1, num_classes, embed_dim]
+            dim=-1  # 在 embed_dim维度计算余弦相似度
+        )  # 最终得到 [batch_size, num_classes, num_classes]
 
-        # 去掉对角线自身相似度
-        mask = ~torch.eye(self.num_classes, dtype=torch.bool, device=prompts.device)
-        sim_values = sim_matrix[mask]
+        # 对角线掩码（批量进行mask）
+        mask = ~torch.eye(num_classes, dtype=torch.bool, device=prompts.device).unsqueeze(
+            0)  # [1, num_classes, num_classes]
+        sim_values = sim_matrix[mask.expand(batch_size, -1, -1)]  # [batch_size, num_classes*(num_classes -1)]
 
-        # 软约束损失
+        # 软约束损失计算
         loss_high = torch.clamp(sim_values - high, min=0) ** 2
         loss_low = torch.clamp(low - sim_values, min=0) ** 2
         loss = torch.mean(loss_high + loss_low)
 
         return loss
-
 
     def forward(self, x):
         """
@@ -172,12 +196,13 @@ class ViT3D(VisionTransformer):
         # 根据池化方法聚合特征
         if self.pool == 'mean':
             pooled_patches = torch.mean(patch_tokens, dim = 1)
-            class_prompts_pooled = torch.mean(class_prompt_features, dim = 1)[0]  # (batch_size, dim)
+            class_prompts_pooled = torch.mean(class_prompt_features, dim = 1)  # (batch_size, dim)
         elif self.pool == 'max':
             pooled_patches = torch.max(patch_tokens, dim = 1)[0]
             class_prompts_pooled = torch.max(class_prompt_features, dim = 1)[0]  # (batch_size, dim)
 
-        combined_features = torch.cat([class_prompts_pooled, pooled_patches], dim = 1)
+
+        combined_features = torch.cat([cls_token_out, pooled_patches], dim = 1)
         # 最终分类头
         out = self.mlp_head(combined_features)
         return out, features, intermediate_features, similarity_loss

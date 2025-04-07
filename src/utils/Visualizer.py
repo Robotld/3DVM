@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
 from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve
+from sklearn.metrics import precision_recall_curve, average_precision_score
+from sklearn.preprocessing import label_binarize
 
 
 def plot_confusion_matrix(y_true, y_pred, class_names=None, save_path=None, title="Confusion matrix"):
@@ -138,47 +140,90 @@ def plot_roc_curves(y_true, y_score, num_classes, save_path=None, class_names=No
 
 def plot_precision_recall_curve(y_true, y_score, num_classes, save_path=None, class_names=None):
     """
-    绘制精确率-召回率曲线
+    Plot Precision-Recall curve
 
-    参数:
-        y_true: 真实标签
-        y_score: 预测概率
-        num_classes: 类别数量
-        save_path: 保存路径
-        class_names: 类别名称列表
+    Parameters:
+        y_true: true labels (1D array)
+        y_score: prediction probabilities (2D array: samples x classes)
+        num_classes: number of classes
+        save_path: path to save the plot
+        class_names: list of class names
     """
     plt.figure(figsize=(10, 8))
 
-    # 将标签转换为one-hot编码
-    y_true_onehot = np.zeros((len(y_true), num_classes))
-    for i, val in enumerate(y_true):
-        if val < num_classes:  # 确保标签在有效范围内
-            y_true_onehot[i, val] = 1
+    # Use label_binarize for safer one-hot encoding conversion
+    if num_classes > 2:
+        y_true_bin = label_binarize(y_true, classes=range(num_classes))
+    else:
+        # Special handling for binary classification
+        y_true_bin = np.zeros((len(y_true), num_classes))
+        for i, val in enumerate(y_true):
+            y_true_bin[i, val] = 1
 
+    # Create color map for different classes
+    colors = plt.cm.tab10(np.linspace(0, 1, num_classes))
+
+    # Store precision and recall values for each class for micro and macro averaging
+    all_precisions = []
+    all_recalls = []
+    average_precisions = []
+
+    # Plot PR curve for each class
     for i in range(num_classes):
-        precision, recall, _ = precision_recall_curve(y_true_onehot[:, i], y_score[:, i])
-        average_precision = np.mean(precision)
+        precision, recall, _ = precision_recall_curve(y_true_bin[:, i], y_score[:, i])
+        all_precisions.append(precision)
+        all_recalls.append(recall)
 
-        class_label = class_names[i] if class_names and i < len(class_names) else f"类别 {i}"
-        plt.plot(recall, precision, lw=2,
-                 label=f'Precision - Recall ({class_label}) (AP = {average_precision:.2f})')
+        # Calculate Average Precision (AP) - approximation of area under curve
+        ap = average_precision_score(y_true_bin[:, i], y_score[:, i])
+        average_precisions.append(ap)
 
+        # Determine class label
+        class_label = class_names[i] if class_names and i < len(class_names) else f"Class {i}"
+
+        # Plot PR curve
+        plt.plot(recall, precision, color=colors[i], lw=2,
+                 label=f'{class_label} (AP={ap:.3f})')
+
+    # Calculate and display macro-average AP
+    macro_ap = np.mean(average_precisions)
+
+    # Add baseline (random classifier)
+    plt.plot([0, 1], [sum(y_true) / len(y_true), sum(y_true) / len(y_true)],
+             linestyle='--', color='gray', alpha=0.8,
+             label=f'Random Classifier (AP={sum(y_true) / len(y_true):.3f})')
+
+    # Set plot properties
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('Recall', fontsize=12)
     plt.ylabel('Precision', fontsize=12)
-    plt.title('Precision-recall curves for each class', fontsize=15)
-    plt.legend(loc="lower left")
+    plt.title(f'Precision-Recall Curves (Macro-Average AP={macro_ap:.3f})', fontsize=15)
+    plt.legend(loc="best", fontsize=10)
+    plt.grid(alpha=0.3)
+
+    # Add text annotation
+    plt.annotate('The closer the curve is to the\nupper right corner,\nthe better the model performs',
+                 xy=(0.95, 0.05), xycoords='axes fraction',
+                 bbox=dict(boxstyle="round,pad=0.3", fc="lightyellow", alpha=0.8),
+                 fontsize=9, ha='right')
 
     plt.tight_layout()
 
+    # Save or display the plot
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"PR curve saved to: {save_path}")
         plt.close()
     else:
         plt.show()
 
+    # Return average precision metrics for further use
+    return {
+        'average_precision_per_class': {i: ap for i, ap in enumerate(average_precisions)},
+        'macro_average_precision': macro_ap
+    }
 
 def plot_feature_importance(feature_importance, feature_names=None, top_n=None, save_path=None):
     """

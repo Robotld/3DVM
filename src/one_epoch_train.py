@@ -3,12 +3,12 @@
 """
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, recall_score
 from tqdm import tqdm
 
 
 def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
-                    loss1_weight=1.0, loss2=None, loss3=None, loss3_weight=0.5,
+                    loss1_weight=1.0, loss2=None, loss3=None, loss2_weight=0.5,
                     train=True, use_amp=True, scaler=None, max_grad_norm=1.0):
     """执行一个epoch的训练或验证，支持AMP"""
 
@@ -25,15 +25,16 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
 
     # 定义前向传播和损失计算函数
     def forward_pass(inputs):
-        model_outputs, features, flow, _ = model(inputs)
-        loss_all = loss1_weight * loss_fn(model_outputs, y) + _
+        model_outputs, features, flow, similarity = model(inputs)
+        loss_all = loss1_weight * loss_fn(model_outputs, y)
         # print(similarity_loss)
         info = {}
+        if loss2:
+            flow_loss, info = loss2(features, y)
+            loss_all += loss2_weight*flow_loss
         if loss3:
-            flow_loss, info = loss3(features, y)
-            loss_all += loss3_weight*flow_loss
-
-        return model_outputs, loss_all, info, _
+            loss_all += similarity
+        return model_outputs, loss_all, info, similarity
 
     # 训练或验证循环
     with torch.set_grad_enabled(train):
@@ -41,8 +42,6 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
             x, y = x.to(device), y.to(device)
 
             if train:
-                optimizer.zero_grad(set_to_none=True)
-
                 if use_amp:
                     with torch.amp.autocast(device_type = 'cuda', enabled = True):
                         outputs, loss, flow_info, similarity_loss= forward_pass(x)
@@ -60,6 +59,7 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
                     if max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
             else:
                     outputs, loss, flow_info, similarity_loss = forward_pass(x)
 
@@ -86,7 +86,7 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
     metrics = {
         'accuracy': accuracy_score(all_labels, all_preds),
         'f1': f1_score(all_labels, all_preds, average='macro'),
-        'loss': np.mean(losses)
+        'loss': np.mean(losses),
     }
 
     if flow_losses:

@@ -49,13 +49,13 @@ def create_transforms(config, args):
                 prob=0.1,
                 rotate_range=(np.pi / 20, np.pi / 20, np.pi / 20),
                 scale_range=(0.1, 0.1, 0.1),
-                translate_range=(5, 5, 5),
+                translate_range=(3, 3, 3),
                 mode="bilinear",
                 padding_mode="zeros"
             ),
-            RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
+            # RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
             RandScaleIntensityd(keys=["image"], prob=0.3, factors=0.1),
-            RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),
+            # RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
         ]
 

@@ -1,9 +1,10 @@
 data:
   num_classes: 2
   root_dirs:
-    - 'G:\datasets3D\nodule_patches96_2'
-    - 'G:\datasets3D\nodule_patches96_3'
-    - 'G:\datasets3D\nodule_patches96_4'
+    - 'E:\data3D\nodule_patches96_1'
+    - 'E:\data3D\nodule_patches96_2'
+    - 'E:\data3D\nodule_patches96_3'
+    - 'E:\data3D\nodule_patches96_4'
   output_dir: 'train_output'
 #  class_names: ['低分化', '中分化', '高分化', '微浸润', '原位癌']
   class_names: ['Invasive', 'Non-invasive']
@@ -15,40 +16,49 @@ model:
     depth: 6
     heads: 6
     mlp_dim: 256
+    mlp_num: 3
     pool: 'max' # mean max all
+    cpt_num: 100
 
 training:
   device: "cuda"
   random_seed: 42
   batch_size: 32
-  num_epochs: 20
+  num_epochs: 40
   num_workers: 4
-  use_amp: False
+  use_amp: True
   cache_dataset: True
   warmup_epochs: 3
   warmup_type: "linear"
   max_grad_norm: 1.0
-  crop_size: 36
+  crop_size: 48
   augment: True
   pretrained_path: 'E:\ultralytics\rad_dino'
+  frozen: True
+
 
 losses:
   CrossEntropyLoss:
-    enabled: true
+    enabled: False
     weight: 1.0
     params: #{} # 如果 CrossEntropyLoss无需参数  但为了保持一致，以及不报错， 这里需要用空字典占位
   FocalLoss:
-    enabled: false  # enabled false 表示 默认不启用
-    weight: 0.5
+    enabled: True  # enabled false 表示 默认不启用
+    weight: 1.0
     params:
       gamma: 2.0
       alpha: 0.25
   BoundaryFlowLoss:
-    enabled: false
-    weight: 0.5
+    enabled: True
+    weight: 1.0
     params:
-      weight: 0.5
-      margin: 0.5
+      weight: 0.7
+      margin: 0.3
+  SimilarityLoss:
+    enabled: False
+    params:
+      low: 0.3
+      high: 0.7
 
 cross_validation:
   n_splits: 5
@@ -64,4 +74,4 @@ scheduler:
   name: "CosineAnnealingLR"
   params:
     T_max: 20
-    eta_min: 5e-7
+    eta_min: 5e-6

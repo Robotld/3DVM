@@ -141,7 +141,9 @@ def main():
         "depth": args.depth,
         "heads": args.heads,
         "mlp_dim": config.model["params"]["mlp_dim"],
-        "pool": args.pool
+        "pool": args.pool,
+        'cpt_num': args.cpt_num,
+        'mlp_num': args.mlp_num,
     }
 
     # 初始化模型

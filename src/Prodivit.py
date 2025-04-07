@@ -74,7 +74,9 @@ def main():
         "depth": args.depth,
         "heads": args.heads,
         "mlp_dim": config.model["params"]["mlp_dim"],
-        "pool": args.pool
+        "pool": args.pool,
+        'cpt_num':args.cpt_num,
+        'mlp_num':args.mlp_num,
     }
 
     best_f1, best_auc = 0, 0
@@ -106,7 +108,7 @@ def main():
             print("随机初始化CLStoken")
             model.cls_token = torch.nn.Parameter(torch.randn(1, 1, model.embed_dim))
         model.to(device)
-
+        print(model.parameters())
         # 加载模型后，冻结encoder部分，只保留CLS token和类原型向量可训练
 
         # freeze_encoder_keep_prompts(model)

@@ -50,17 +50,22 @@ def parse_args(config):
                         help = 'VIT encoder head number')
     parser.add_argument('--pool', type = str, default = config.model['params']["pool"],
                         help = 'pool: max min all')
+    parser.add_argument('--cpt_num', type=int, default=config.model['params']["cpt_num"],
+                        help='Class prototype Token num')
+    parser.add_argument('--mlp_num', type=int, default=config.model['params']["mlp_num"],
+                        help='MLP 层数')
+    parser.add_argument('--frozen', type=bool, default=config.training['frozen'],
+                        help='是否冻结backbone')
 
     # 添加损失函数选项
     parser.add_argument("--loss1", type = bool, default = config.losses['CrossEntropyLoss']['enabled'],
-                        help = "是否使用CrossEntropyLoss")
-    parser.add_argument("--loss2", type = bool, default = config.losses['FocalLoss']['enabled'],
-                        help = "是否使用FocalLoss")
-    parser.add_argument("--loss3", type = bool, default = config.losses['BoundaryFlowLoss']['enabled'],
+                        help = "是否使用CrossEntropyLoss, FocalLoss")
+    parser.add_argument("--loss2", type = bool, default = config.losses['BoundaryFlowLoss']['enabled'],
                         help = "是否使用BoundaryFlowLoss")
+    parser.add_argument("--loss3", type=bool, default=config.losses['SimilarityLoss']['enabled'],
+                        help="是否添加SimilarityLoss")
 
-    parser.add_argument("--loss1_weight", type = float, default = config.losses['BoundaryFlowLoss']['weight'], help = "主损失函数权重")
-    parser.add_argument("--loss2_weight", type = float, default = config.losses['FocalLoss']['weight'], help = "辅助损失函数1权重")
-    parser.add_argument("--loss3_weight", type = float, default = config.losses['BoundaryFlowLoss']['weight'], help = "辅助损失函数2权重")
+    parser.add_argument("--loss1_weight", type = float, default = config.losses['CrossEntropyLoss']['weight'], help = "主损失函数权重")
+    parser.add_argument("--loss2_weight", type = float, default = config.losses['BoundaryFlowLoss']['weight'], help = "辅助损失函数2权重")
 
     return parser.parse_args()

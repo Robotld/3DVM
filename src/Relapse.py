@@ -27,10 +27,6 @@ def main():
     args = parse_args(config)
     config = update_config_from_args(config, args)
 
-    # 设置随机种子
-    torch.manual_seed(config.training["random_seed"])
-    np.random.seed(config.training["random_seed"])
-
     set_seed()
 
     # 优化CUDA性能
@@ -80,9 +76,12 @@ def main():
         "depth": args.depth,
         "heads": args.heads,
         "mlp_dim": config.model["params"]["mlp_dim"],
-        "pool": args.pool
+        "pool": args.pool,
+        'cpt_num': args.cpt_num,
+        'mlp_num': args.mlp_num,
     }
 
+    best_f1, best_auc = 0.0, 0.0
     # 进行交叉验证
     for fold, train_loader, val_loader, train_counter in cv.get_folds(train_transforms, val_transforms):
         # 记录每个fold的数据计数器，用于计算类别权重
@@ -100,37 +99,54 @@ def main():
         # 加载预训练权重
         if args.pretrained_path:
             print(f"Loading pretrained weights from {args.pretrained_path}...")
-            # try:
-            if os.path.isdir(args.pretrained_path):
-                model.load_pretrained_dino(args.pretrained_path)
-            else:
-                model.load_state_dict(torch.load(args.pretrained_path, map_location=device), strict=False)
-                print(f"成功加载权重: {args.pretrained_path}")
-            # except Exception as e:
-            #     print(f"加载预训练权重出错: {str(e)}")
+            try:
+                if os.path.isdir(args.pretrained_path):
+                    model.load_pretrained_dino(args.pretrained_path)
+                else:
+                    # 加载时跳过不匹配的参数
+                    model.load_state_dict(torch.load(args.pretrained_path, map_location=device), strict=False)
+                    print(f"成功加载权重: {args.pretrained_path}")
+            except Exception as e:
+                print(f"加载预训练权重出错: {str(e)}")
             print("随机初始化CLStoken")
             model.cls_token = torch.nn.Parameter(torch.randn(1, 1, model.embed_dim))
+
         model.to(device)
+        if args.frozen:
+            freeze_encoder_keep_prompts(model)
 
-        # freeze_encoder_keep_prompts(model)
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"模型总参数量: {total_params:,}")
-        print(f"可训练参数量: {trainable_params:,}")
+        # 打印可训练参数数量及名称
+        trainable_params = [name for name, param in model.named_parameters() if param.requires_grad]
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+        print(f"可训练参数总数: {total_params}")
+        print(f"可训练参数列表: {trainable_params}")
         # 训练模型
-        best_f1, best_auc, _, _ = train(model=model,
-                                  train_loader=train_loader,
-                                  val_loader=val_loader,
-                                  config=config,
-                                  device=device,
-                                  args=args,
-                                  fold=fold,
-                                  train_dir=train_dir)
+        f1, auc, best_f1_model, best_auc_model = train(model=model,
+                                                       train_loader=train_loader,
+                                                       val_loader=val_loader,
+                                                       config=config,
+                                                       device=device,
+                                                       args=args,
+                                                       fold=fold,
+                                                       train_dir=train_dir,
+                                                       best_f1=best_f1,
+                                                       best_auc=best_auc)
 
-        fold_scores.append((best_f1, best_auc))
+        if best_auc <= auc:
+            best_auc = auc
+            best_auc_model = best_auc_model
+            torch.save(best_auc_model, f'{train_dir}/best_auc_model.pth')
+
+        if best_f1 <= f1:
+            best_f1 = f1
+            best_f1_model = best_f1_model
+            torch.save(best_f1_model, f'{train_dir}/best_f1_model.pth')
+
+        fold_scores.append((f1, auc))
         fold_time = time.time() - fold_start_time
-        print(f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {best_f1:.4f} with Best AUC: {best_auc:.4f}')
+        print(
+            f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {best_f1:.4f} with Best AUC: {best_auc:.4f}')
 
         # 释放模型内存
         del model
@@ -147,6 +163,14 @@ def main():
     std_auc = np.std(fold_scores[:, 1])
     print(f'Mean F1: {mean_f1:.4f} ± {std_f1:.4f}\n'
           f'Mean AUC: {mean_auc:.4f} ± {std_auc:.4f}\n')
+
+    cv_results_path = os.path.join(train_dir, 'cv_results.txt')
+    with open(cv_results_path, 'w') as f:
+        f.write("Cross-Validation Results:\n")
+        for fold, score in enumerate(fold_scores):
+            f.write(f'Fold {fold + 1}: F1 {score[0]:.4f}   AUC {score[1]:.4f}\n')
+        f.write(f'\nMean F1: {mean_f1:.4f} ± {std_f1:.4f}\n')
+        f.write(f'Mean AUC: {mean_auc:.4f} ± {std_auc:.4f}\n')
 
     # 打印总运行时间
     total_time = time.time() - start_time

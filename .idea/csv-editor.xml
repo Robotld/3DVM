@@ -3,13 +3,6 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
-        <entry key="C:\Users\11476\AppData\Roaming\JetBrains\PyCharmCE2024.1\scratches\scratch.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
         <entry key="\datasets\CTreport\1.csv">
           <value>
             <Attribute>
@@ -46,20 +39,6 @@
           </value>
         </entry>
         <entry key="\src\train_output\best\train_20\training_history_fold_4.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
-        <entry key="\src\train_output\train_1\training_history_fold_0.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
-        <entry key="\src\train_output\train_20\training_history_fold_4.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

@@ -12,6 +12,7 @@ from models import WarmupScheduler
 from models import build_loss
 from one_epoch_train import one_epoch_train
 from utils import save_training_history, save_config
+from utils import plot_confusion_matrix, plot_roc_curves, plot_precision_recall_curve, progressive_unfreeze
 
 
 def train(model, train_loader, val_loader, config, fold, device, args,
@@ -53,12 +54,13 @@ def train(model, train_loader, val_loader, config, fold, device, args,
     print("-----------------------------------\n")
 
     # 损失函数
-    # loss_fn = FocalLoss()
-    loss = build_loss(args.loss1, "CrossEntropyLoss", config) if args.loss1 else build_loss(args.loss2, "FocalLoss", config)
-    loss2 = None
-    loss3 = build_loss(args.loss3, "BoundaryFlowLoss", config)
-
-    print("启用损失函数：", loss, loss3)
+    fn = build_loss(args.loss1, "CrossEntropyLoss", config)
+    loss = fn if fn else build_loss(True, "FocalLoss", config)
+    loss2 = build_loss(args.loss2, "BoundaryFlowLoss", config)
+    loss3 = args.loss3
+    print("启用损失函数：", loss, loss2)
+    if loss3:
+        print("启用类提示向量相似性损失")
 
     # 初始化混合精度训练
     use_amp = device.type == 'cuda' and args.use_amp
@@ -102,7 +104,7 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             loss2=loss2,
             loss3=loss3,
             loss1_weight=args.loss1_weight,
-            loss3_weight=args.loss3_weight,
+            loss2_weight=args.loss2_weight,
             device=device,
             train=True,
             scaler=scaler,
@@ -120,7 +122,7 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             loss2=loss2,
             loss3=loss3,
             loss1_weight=args.loss1_weight,
-            loss3_weight=args.loss3_weight,
+            loss2_weight=args.loss2_weight,
             device=device,
             train=False,
             scaler=scaler,
@@ -182,26 +184,29 @@ def train(model, train_loader, val_loader, config, fold, device, args,
         val_metrics_history
     )
 
-    # 使用外部可视化模块生成图表
-    from utils import plot_confusion_matrix, plot_roc_curves
-    # 如果有保存的最佳模型预测数据，绘制混淆矩阵和ROC曲线
-    if best_val_preds is not None and best_val_labels is not None:
-        # 绘制混淆矩阵
-        plot_confusion_matrix(
-            best_val_labels,
-            best_val_preds,
-            class_names=config.data['class_names'],  # 可以从args获取类别名称
-            save_path=os.path.join(train_dir, f'confusion_matrix_fold_{fold}.png')
-        )
+    plot_confusion_matrix(
+        best_val_labels,
+        best_val_preds,
+        class_names=config.data['class_names'],  # 可以从args获取类别名称
+        save_path=os.path.join(train_dir, f'confusion_matrix_fold_{fold}.png')
+    )
 
-        # 绘制ROC曲线
-        if best_val_probs is not None:
-            plot_roc_curves(
-                best_val_labels,
-                best_val_probs,
-                num_classes=config.data['num_classes'],
-                save_path=os.path.join(train_dir, f'roc_curves_fold_{fold}.png')
-            )
+    plot_precision_recall_curve(
+        best_val_labels,
+        best_val_probs,
+        num_classes=config.data['num_classes'],
+        class_names=config.data['class_names'],
+        save_path=os.path.join(train_dir, f'precision_recall_{fold}.png')
+    )
+
+    # 绘制ROC曲线
+    plot_roc_curves(
+        best_val_labels,
+        best_val_probs,
+        num_classes=config.data['num_classes'],
+        save_path=os.path.join(train_dir, f'roc_curves_fold_{fold}.png')
+    )
+
 
     # 返回最佳指标
     return best_val_f1, best_val_auc, best_f1_model, best_auc_model

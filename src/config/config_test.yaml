@@ -9,13 +9,15 @@ data:
 
 model:
   params:
-    image_size: 96
+    image_size: 96 # 96 * 96 * 96
     patch_size: 6
-    dim: 768
-    depth: 12
-    heads: 12
+    dim: 384
+    depth: 6
+    heads: 6
     mlp_dim: 256
-    pool: max
+    mlp_num: 3
+    pool: 'max' # mean max all
+    cpt_num: 5
 
 training:
   device: "cuda"
@@ -31,6 +33,8 @@ training:
   crop_size: 36
   augment: False
   pretrained_path: 'E:\workplace\3D\src\train_output\train_20250326_114226\best_f1_model_fold_4.pth'
+  frozen: False
+
 losses:
   CrossEntropyLoss:
     enabled: true
@@ -48,6 +52,12 @@ losses:
     params:
       weight: 0.5
       margin: 0.5
+  SimilarityLoss:
+    enabled: False
+    params:
+      low: 0.3
+      high: 0.7
+
 
 cross_validation:
   n_splits: 5
