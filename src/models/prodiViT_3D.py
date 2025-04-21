@@ -205,7 +205,7 @@ class ViT3D(VisionTransformer):
         combined_features = torch.cat([cls_token_out, pooled_patches], dim = 1)
         # 最终分类头
         out = self.mlp_head(combined_features)
-        return out, features, intermediate_features, similarity_loss
+        return out, combined_features, intermediate_features, similarity_loss
 
     def load_pretrained_dino(self, path):
         """加载预训练的DINOv2权重"""

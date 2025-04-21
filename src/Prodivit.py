@@ -15,10 +15,13 @@ from models import ViT3D
 from models import NoduleDataset
 from utils import update_config_from_args, parse_args, ConfigManager, set_seed, freeze_encoder_keep_prompts
 from train import train
+from utils.Visualizer import set_journal_style
+set_journal_style() # 设置图表格式
 
 
 def main():
     # 记录开始时间
+
     start_time = time.time()
 
     # 加载配置
@@ -34,7 +37,7 @@ def main():
     # 优化CUDA性能
     if torch.cuda.is_available():
         # 设置GPU优先模式为性能优先
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = False
         # 确定性算法提高一致性
         torch.backends.cudnn.deterministic = True
         # 清除缓存
@@ -46,16 +49,16 @@ def main():
         print(f"使用磁盘缓存目录: {args.cache_dir}")
 
     # 创建输出目录（只创建一个总目录）
-    os.makedirs(args.output_dir, exist_ok = True)
+    os.makedirs(args.output_dir, exist_ok=True)
     # 创建单个训练输出目录
     train_dir = os.path.join(args.output_dir, f'train_{time.strftime("%Y%m%d_%H%M%S")}')
-    os.makedirs(train_dir, exist_ok = True)
+    os.makedirs(train_dir, exist_ok=True)
 
     # 创建MONAI转换管道
     train_transforms, val_transforms = create_transforms(config, args)
 
     # 创建数据集
-    dataset = NoduleDataset(args.data_dir, num_classes = args.num_classes, transform = None)
+    dataset = NoduleDataset(args.data_dir, num_classes=args.num_classes, transform=None)
 
     # 初始化交叉验证器，传入缓存目录
     cv = CrossValidator(dataset, config)
@@ -75,8 +78,8 @@ def main():
         "heads": args.heads,
         "mlp_dim": config.model["params"]["mlp_dim"],
         "pool": args.pool,
-        'cpt_num':args.cpt_num,
-        'mlp_num':args.mlp_num,
+        'cpt_num': args.cpt_num,
+        'mlp_num': args.mlp_num,
     }
 
     best_f1, best_auc = 0, 0
@@ -108,7 +111,6 @@ def main():
             print("随机初始化CLStoken")
             model.cls_token = torch.nn.Parameter(torch.randn(1, 1, model.embed_dim))
         model.to(device)
-        print(model.parameters())
         # 加载模型后，冻结encoder部分，只保留CLS token和类原型向量可训练
 
         # freeze_encoder_keep_prompts(model)
@@ -119,35 +121,27 @@ def main():
         print(f"可训练参数量: {trainable_params:,}")
 
         # 训练模型
-        f1, auc, best_f1_model, best_auc_model = train(model = model,
-                                                       train_loader = train_loader,
-                                                       val_loader = val_loader,
-                                                       config = config,
-                                                       device = device,
-                                                       args = args,
-                                                       fold = fold,
-                                                       train_dir = train_dir,
-                                                       best_f1 = best_f1,
-                                                       best_auc = best_auc)
-
-        if best_auc <= auc:
-            best_auc = auc
-            best_auc_model = best_auc_model
-            torch.save(best_auc_model, f'{train_dir}/best_auc_model.pth')
-
-        if best_f1 <= f1:
-            best_f1 = f1
-            best_f1_model = best_f1_model
-            torch.save(best_f1_model, f'{train_dir}/best_f1_model.pth')
+        f1, auc = train(model=model,
+                        train_loader=train_loader,
+                        val_loader=val_loader,
+                        config=config,
+                        device=device,
+                        args=args,
+                        fold=fold,
+                        train_dir=train_dir,
+                        best_f1=best_f1,
+                        best_auc=best_auc)
 
         fold_scores.append((f1, auc))
         fold_time = time.time() - fold_start_time
-        print(f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {best_f1:.4f} with Best AUC: {best_auc:.4f}')
+        print(
+            f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {f1:.4f} with Best AUC: {auc:.4f}')
 
         # 释放模型内存
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
     fold_scores = np.array(fold_scores)
     # 打印最终结果
     print('\nCross-Validation Results:')

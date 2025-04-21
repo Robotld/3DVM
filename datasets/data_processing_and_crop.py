@@ -19,7 +19,7 @@ NIFTI_ROOT = Path(r"G:\datasets3D\test")
 LABEL_ROOT = Path(r"G:\data2\labels")
 OUTPUT_ROOT = Path(r"G:\datasets3D\test_crop")
 PATCH_SIZE_MM = 96  # Physical size in mm (before resampling)
-TARGET_SPACING = (0.5, 0.5, 2)  # Target isotropic resolution
+TARGET_SPACING = (1, 1, 1)  # Target isotropic resolution
 TARGET_SHAPE = (96, 96, 96)  # Final shape of each patch after resampling
 CLASS_NAMES = {
     "0": "低分化",

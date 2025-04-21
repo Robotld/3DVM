@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.onnx.symbolic_opset9 import tensor
 
 LOSS_REGISTRY = {
     "CrossEntropyLoss": nn.CrossEntropyLoss,
@@ -302,3 +303,50 @@ def build_loss(enabled, name, config):
         loss = LOSS_REGISTRY[name](**loss_params)
 
     return loss
+
+
+class MultitaskLoss(nn.Module):
+    """多任务损失函数，处理复发预测和亚型分类"""
+
+    def __init__(self, recurrence_weight=1.0, subtype_weight=0.5, similarity_weight=0.1):
+        """
+        参数:
+            recurrence_weight: 复发预测任务的权重
+            subtype_weight: 亚型分类任务的权重
+            similarity_weight: 提示向量相似度损失的权重
+        """
+        super().__init__()
+        self.recurrence_weight = recurrence_weight
+        self.subtype_weight = subtype_weight
+        self.similarity_weight = similarity_weight
+
+        self.recurrence_criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.3, 0.7], device='cuda'))  # 直接忽略-1标签
+        self.subtype_criterion = nn.CrossEntropyLoss()
+
+    def forward(self, recurrence_logits, subtype_logits, recurrence_labels, subtype_labels, similarity_loss):
+        """
+        计算多任务损失
+        参数:
+            recurrence_logits: 复发预测的输出 [batch_size, 2]
+            subtype_logits: 亚型分类的输出 [batch_size, 5]
+            similarity_loss: 提示向量相似度损失
+            recurrence_labels: 复发标签 [batch_size]
+            subtype_labels: 亚型标签 [batch_size]
+        """
+        # 复发预测损失 - 直接使用CrossEntropyLoss的ignore_index功能
+        recurrence_loss = self.recurrence_criterion(
+            recurrence_logits,
+            recurrence_labels  # 确保标签是长整型
+        )
+        # 亚型分类损失
+        subtype_loss = self.subtype_criterion(
+            subtype_logits,
+            subtype_labels  # 确保标签是长整型
+        )
+
+        # 总损失 = 复发预测权重 * 复发损失 + 亚型分类权重 * 亚型损失 + 相似度损失权重 * 相似度损失
+        total_loss = (self.recurrence_weight * recurrence_loss +
+                      self.subtype_weight * subtype_loss +
+                      self.similarity_weight * similarity_loss)
+
+        return total_loss, recurrence_loss, subtype_loss, similarity_loss

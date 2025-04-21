@@ -1,8 +1,5 @@
 import csv
-import glob
-import os
-import numpy as np
-import torch
+
 from torch.utils.data import Dataset
 from typing import Union, List
 
@@ -22,7 +19,7 @@ class NoduleDataset(Dataset):
         self.transform = transform
         self.samples = []
 
-        class_map2 = {0: 0, 1: 0, 2: 0, 3: 1, 4: 1}
+        class_map2 = {0: 1, 1: 1, 2: 1, 3: 0, 4: 0}     # 将浸润性作为正类-阳性    浸润前作为负类-阴性
         class_map3 = {0, 1, 2}
         # 处理 root_dirs 可能来自 YAML 的情况
         # 确保 root_dirs 是一个正确的 Python 列表或字符串
@@ -87,9 +84,6 @@ class NoduleDataset(Dataset):
         return data_dict["image"], data_dict["label"]
 
 
-import csv
-import os
-import glob
 from typing import Union, List
 from torch.utils.data import Dataset
 
@@ -163,4 +157,196 @@ class RecurrenceDataset(Dataset):
 
         return data_dict["image"], data_dict["label"]
 
-# RecurrenceDataset(r"E:\workplace\3D\datasets\CTreport\协和预后随访复发与否.csv", )
+
+import os
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+import re
+from collections import defaultdict
+
+
+class MultimodalRecurrenceDataset(Dataset):
+    """多模态肺癌复发预测与亚型分类多任务数据集，仅包含有复发标签的样本"""
+
+    def __init__(self, csv_path, root_dirs, transform=None, text_tokenizer=None, max_length=512):
+        """
+        参数:
+            csv_path: 随访数据CSV文件路径
+            root_dirs: 数据集根目录，包含所有CT图像（字符串或字符串列表）
+            transform: 图像转换操作
+            text_tokenizer: 文本分词器
+            max_length: 文本最大长度
+        """
+        self.transform = transform
+        self.text_tokenizer = text_tokenizer
+        self.max_length = max_length
+        self.samples = []
+        self._data_counter = None  # 用于存储交叉验证中的数据计数情况
+
+        # 读取CSV文件
+        df = pd.read_csv(csv_path, encoding='utf-8')
+
+        # 确保root_dirs是列表
+        if isinstance(root_dirs, str):
+            root_dirs = [root_dirs]
+
+        # 处理性别，转为数值
+        df['性别_数值'] = df['性别'].map({'男': 1, '女': 0})
+
+        # 处理年龄，去除"岁"字并转为数值
+        df['年龄_数值'] = df['年龄'].str.replace('岁', '').astype(float)
+
+        # 标准化年龄（0-1）
+        age_min, age_max = df['年龄_数值'].min(), df['年龄_数值'].max()
+        df['年龄_标准化'] = (df['年龄_数值'] - age_min) / (age_max - age_min)
+
+        # 处理复发标签
+        df['复发标签'] = df['有无复发'].map({'有': 1, '无': 0})
+
+        # 构建CT号到样本信息的映射
+        ct_info_map = {}
+        # 统计有复发标签的CT号集合
+        ct_with_recurrence_label = set()
+
+        for idx, row in df.iterrows():
+            ct_number = row['CT号']  # 假设列名是"术前最近一次CT号"，请根据实际情况调整
+            if pd.notna(ct_number) and ct_number.strip():  # 确保CT号不为空
+                recurrence_label = row['复发标签']
+
+                # 记录所有有复发标签的CT号
+                ct_with_recurrence_label.add(ct_number)
+
+                ct_info_map[ct_number] = {
+                    'label': recurrence_label,
+                    # 如果病理报告和CT报告均存在，则用换行符连接；如果某个报告为空，则不影响结果
+                    'report': (row['病理报告'] if pd.notna(row['病理报告']) else "") + "\n" + (
+                        row['CT报告'] if pd.notna(row['CT报告']) else ""),
+                    'gender': row['性别_数值'],
+                    'age': row['年龄_标准化'],
+                    'name': row['姓名'] if '姓名' in row else ""
+                }
+
+        # 用于记录找到CT图像的CT号
+        found_ct_numbers = set()
+        # 根据亚型记录找到的CT图像数量
+        found_by_subtype = defaultdict(int)
+
+        # 遍历所有根目录，收集图像路径和肿瘤亚型标签
+        for root_dir in root_dirs:
+            for subtype in range(5):  # 0-4 分别代表低分化、中分化、高分化、微浸润、原位癌
+                subtype_dir = os.path.join(root_dir, str(subtype))
+                if not os.path.exists(subtype_dir):
+                    continue
+
+                for file in os.listdir(subtype_dir):
+                    if file.endswith('.nii.gz'):
+                        file_path = os.path.join(subtype_dir, file)
+
+                        # 提取CT号
+                        # 尝试从文件名中提取CT号
+                        match = re.search(r'(UCT\d+)', file)
+                        if match:
+                            ct_number = match.group(1)
+                        else:
+                            # 如果没有UCT编号，使用文件名前缀作为标识
+                            ct_number = file.split('.')[0]
+
+                        # 只添加有复发标签的样本
+                        if ct_number in ct_info_map:
+                            info = ct_info_map[ct_number]
+                            self.samples.append({
+                                'image_path': file_path,
+                                'report': info['report'],
+                                'gender': info['gender'],
+                                'age': info['age'],
+                                'recurrence_label': info['label'],
+                                'subtype_label': subtype,  # 肿瘤亚型标签
+                                'name': info.get('name', ""),
+                                'ct_number': ct_number
+                            })
+                            found_ct_numbers.add(ct_number)
+                            found_by_subtype[subtype] += 1
+
+        # 找出有复发标签但没有CT图像的CT号
+        missing_ct_numbers = ct_with_recurrence_label - found_ct_numbers
+
+        # 打印统计信息
+        print(f"\n===== 数据集统计信息 =====")
+        print(f"CSV中有复发标签的CT号总数: {len(ct_with_recurrence_label)}")
+        print(f"找到CT图像的样本数: {len(found_ct_numbers)}")
+        print(f"有复发标签但找不到CT图像的CT号数: {len(missing_ct_numbers)}")
+
+        if missing_ct_numbers:
+            print("\n以下CT号有复发标签但找不到对应的CT图像:")
+            for ct_number in sorted(missing_ct_numbers):
+                print(f"  - {ct_number}")
+
+        # 按复发状态统计
+        recurrence_count = sum(1 for sample in self.samples if sample['recurrence_label'] == 1)
+        non_recurrence_count = sum(1 for sample in self.samples if sample['recurrence_label'] == 0)
+
+        print(f"\n有效样本总数: {len(self.samples)}")
+        print(f"复发样本数: {recurrence_count}")
+        print(f"非复发样本数: {non_recurrence_count}")
+
+        # 打印亚型分布
+        print("\n各亚型样本分布:")
+        for i in range(5):
+            count = found_by_subtype[i]
+            print(f"  亚型 {i} 样本数: {count}")
+        print("============================\n")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+
+        # 准备文本特征
+        report_text = sample['report']
+        if self.text_tokenizer and report_text:
+            # 使用tokenizer处理文本
+            text_encoding = self.text_tokenizer(
+                report_text,
+                max_length=self.max_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+            # 压缩第一维
+            text_inputs = {k: v.squeeze(0) for k, v in text_encoding.items()}
+        else:
+            # 如果没有提供tokenizer或没有文本，创建空的输入
+            if self.text_tokenizer:
+                text_encoding = self.text_tokenizer(
+                    "",
+                    max_length=self.max_length,
+                    padding='max_length',
+                    truncation=True,
+                    return_tensors='pt'
+                )
+                text_inputs = {k: v.squeeze(0) for k, v in text_encoding.items()}
+            else:
+                text_inputs = {}
+
+        # 准备人口学特征
+        demographic = torch.tensor([sample['age'], sample['gender']], dtype=torch.float32)
+
+        data_dict = {
+            "image": sample['image_path'],
+            "text": text_inputs,
+            "demographic": demographic,
+            "recurrence_label": sample['recurrence_label'],
+            "subtype_label": sample['subtype_label'],
+            "ct_number": sample['ct_number']
+        }
+
+        # 应用图像转换
+        if self.transform:
+            # 转换只应用于图像部分
+            image_dict = {"image": data_dict["image"], "label": data_dict["recurrence_label"]}
+            transformed = self.transform(image_dict)
+            data_dict["image"] = transformed["image"]
+
+        return data_dict

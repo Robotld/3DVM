@@ -64,16 +64,27 @@ def save_training_history(train_dir, fold, train_metrics_history, val_metrics_hi
 
     # 创建数据框
     import pandas as pd
+
     data = {
         'epoch': list(range(1, len(train_metrics_history) + 1)),
-        'train_loss': [m['loss'] for m in train_metrics_history],
-        'train_acc': [m['accuracy'] for m in train_metrics_history],
-        'train_f1': [m['f1'] for m in train_metrics_history],
-        'train_auc': [m['auc'] for m in train_metrics_history],
-        'val_loss': [m['loss'] for m in val_metrics_history],
-        'val_acc': [m['accuracy'] for m in val_metrics_history],
-        'val_f1': [m['f1'] for m in val_metrics_history],
-        'val_auc': [m['auc'] for m in val_metrics_history]
+        'train_loss': [m.get('loss', float('nan')) for m in train_metrics_history],
+        'train_acc': [m.get('accuracy', float('nan')) for m in train_metrics_history],
+        'train_f1': [m.get('f1', float('nan')) for m in train_metrics_history],
+        'train_auc': [m.get('auc', float('nan')) for m in train_metrics_history],
+        'train_sensitivity': [m.get('sensitivity', float('nan')) for m in train_metrics_history],
+        'train_specificity': [m.get('specificity', float('nan')) for m in train_metrics_history],
+        'train_ppv': [m.get('ppv', float('nan')) for m in train_metrics_history],
+        'train_npv': [m.get('npv', float('nan')) for m in train_metrics_history],
+        'val_loss': [m.get('loss', float('nan')) for m in val_metrics_history],
+        'val_acc': [m.get('accuracy', float('nan')) for m in val_metrics_history],
+        'val_f1': [m.get('f1', float('nan')) for m in val_metrics_history],
+        'val_auc': [m.get('auc', float('nan')) for m in val_metrics_history],
+        'val_sensitivity': [m.get('sensitivity', float('nan')) for m in val_metrics_history],
+        'val_specificity': [m.get('specificity', float('nan')) for m in val_metrics_history],
+        'val_ppv': [m.get('ppv', float('nan')) for m in val_metrics_history],
+        'val_npv': [m.get('npv', float('nan')) for m in val_metrics_history],
+        'val_threshold': [m.get('threshold', 0.5) for m in val_metrics_history],
+        'train_threshold': [m.get('threshold', 0.5) for m in train_metrics_history]
     }
 
     # 转换为DataFrame并保存
@@ -82,61 +93,8 @@ def save_training_history(train_dir, fold, train_metrics_history, val_metrics_hi
 
     # 2. 生成可视化图表
     try:
-        plot_path = plot_training_history(train_dir, fold, train_metrics_history, val_metrics_history)
+        if data['epoch'][0] > 1:
+            plot_training_history(train_dir, fold, train_metrics_history, val_metrics_history)
     except Exception as e:
         print(f"生成图表时出错: {str(e)}")
-        plot_path = None
 
-    # 3. 保存为Excel (易于查看且包含图表)
-    try:
-        excel_path = os.path.join(train_dir, f'training_history_fold_{fold}.xlsx')
-        writer = pd.ExcelWriter(excel_path, engine='xlsxwriter')
-        df.to_excel(writer, sheet_name='Training History', index=False)
-
-        # 添加图表
-        workbook = writer.book
-        worksheet = writer.sheets['Training History']
-
-        # 添加折线图 - 损失
-        chart_loss = workbook.add_chart({'type': 'line'})
-        chart_loss.add_series({
-            'name': 'Train Loss',
-            'categories': ['Training History', 1, 0, len(df), 0],
-            'values': ['Training History', 1, 1, len(df), 1],
-        })
-        chart_loss.add_series({
-            'name': 'Val Loss',
-            'categories': ['Training History', 1, 0, len(df), 0],
-            'values': ['Training History', 1, 5, len(df), 5],
-        })
-        chart_loss.set_title({'name': 'Loss'})
-        chart_loss.set_x_axis({'name': 'Epoch'})
-        chart_loss.set_y_axis({'name': 'Loss'})
-        worksheet.insert_chart('J2', chart_loss)
-
-        # 添加折线图 - 准确率
-        chart_acc = workbook.add_chart({'type': 'line'})
-        chart_acc.add_series({
-            'name': 'Train Acc',
-            'categories': ['Training History', 1, 0, len(df), 0],
-            'values': ['Training History', 1, 2, len(df), 2],
-        })
-        chart_acc.add_series({
-            'name': 'Val Acc',
-            'categories': ['Training History', 1, 0, len(df), 0],
-            'values': ['Training History', 1, 6, len(df), 6],
-        })
-        chart_acc.set_title({'name': 'Accuracy'})
-        chart_acc.set_x_axis({'name': 'Epoch'})
-        chart_acc.set_y_axis({'name': 'Accuracy'})
-        worksheet.insert_chart('J18', chart_acc)
-
-        writer.close()
-        print(f"Excel报表已保存至: {excel_path}")
-    except Exception as e:
-        print(f"生成Excel报表时出错: {str(e)}")
-
-    return {
-        'csv_path': csv_path,
-        'plot_path': plot_path
-    }

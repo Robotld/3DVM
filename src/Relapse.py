@@ -122,7 +122,7 @@ def main():
         print(f"可训练参数总数: {total_params}")
         print(f"可训练参数列表: {trainable_params}")
         # 训练模型
-        f1, auc, best_f1_model, best_auc_model = train(model=model,
+        f1, auc = train(model=model,
                                                        train_loader=train_loader,
                                                        val_loader=val_loader,
                                                        config=config,
@@ -132,26 +132,16 @@ def main():
                                                        train_dir=train_dir,
                                                        best_f1=best_f1,
                                                        best_auc=best_auc)
-
-        if best_auc <= auc:
-            best_auc = auc
-            best_auc_model = best_auc_model
-            torch.save(best_auc_model, f'{train_dir}/best_auc_model.pth')
-
-        if best_f1 <= f1:
-            best_f1 = f1
-            best_f1_model = best_f1_model
-            torch.save(best_f1_model, f'{train_dir}/best_f1_model.pth')
-
         fold_scores.append((f1, auc))
         fold_time = time.time() - fold_start_time
         print(
-            f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {best_f1:.4f} with Best AUC: {best_auc:.4f}')
+            f'Fold {fold + 1} completed in {fold_time:.2f}s with Best F1: {f1:.4f} with Best AUC: {auc:.4f}')
 
         # 释放模型内存
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
     fold_scores = np.array(fold_scores)
     # 打印最终结果
     print('\nCross-Validation Results:')

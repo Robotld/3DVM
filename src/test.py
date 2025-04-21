@@ -2,94 +2,19 @@
 测试脚本
 负责加载预训练模型并在测试集上进行评估
 """
-import os
 import time
-import numpy as np
 import torch
-from ruamel.yaml import YAML
-from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, classification_report, confusion_matrix
-from tqdm import tqdm
-from sklearn.preprocessing import normalize
 
 # 导入自定义模块
 from models import create_transforms
 from models import ViT3D
 from models import NoduleDataset
-from utils import parse_args, ConfigManager
-
-
-def test_model(model, test_loader, device, class_names=None):
-    """测试模型在测试集上的性能"""
-    model.eval()  # 设置为评估模式
-
-    all_preds = []
-    all_labels = []
-    all_probs = []
-
-    print("开始测试...")
-    with torch.no_grad():  # 不计算梯度
-        for inputs, labels in tqdm(test_loader, desc="测试进度"):
-            inputs, labels = inputs.to(device), labels.to(device)
-            # 前向传播
-            outputs, features, flow = model(inputs)
-            # 获取预测和概率
-            probs = torch.nn.functional.softmax(outputs, dim=1)
-            _, preds = torch.max(probs, 1)
-
-            # 收集结果
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-            all_probs.extend(probs.cpu().numpy())
-
-    # 转换为numpy数组
-    all_preds = np.array(all_preds)
-    all_labels = np.array(all_labels)
-    all_probs = np.array(all_probs)
-
-    # 确保概率和为1
-    all_probs = normalize(all_probs, norm='l1', axis=1)
-
-    # 计算评估指标
-    accuracy = accuracy_score(all_labels, all_preds)
-    f1 = f1_score(all_labels, all_preds, average='macro')
-
-    num_classes = all_probs.shape[1]
-    if num_classes > 2:
-        auc = roc_auc_score(all_labels, all_probs, multi_class='ovr')
-    else:
-        auc = roc_auc_score(all_labels, all_probs[:, 1])
-
-    # 计算每类准确率
-    unique_classes = np.unique(all_labels)
-    per_class_accuracy = {
-        cls: np.mean(all_preds[all_labels == cls] == cls)
-        for cls in unique_classes
-    }
-
-    # 生成混淆矩阵
-    cm = confusion_matrix(all_labels, all_preds)
-
-    # 生成详细分类报告
-    if class_names:
-        cls_report = classification_report(all_labels, all_preds, target_names=class_names)
-    else:
-        cls_report = classification_report(all_labels, all_preds)
-
-    # 返回测试结果
-    results = {
-        'accuracy': accuracy,
-        'f1': f1,
-        'auc': auc,
-        'per_class_accuracy': per_class_accuracy,
-        'confusion_matrix': cm,
-        'classification_report': cls_report,
-        'predictions': all_preds,
-        'true_labels': all_labels,
-        'probabilities': all_probs
-    }
-
-    return results
-
+from one_epoch_train import one_epoch_train
+from models import build_loss
+from utils import calculate_metrics
+from utils.Visualizer import *
+from utils import parse_args, ConfigManager, set_seed
+from train import save_metrics_to_csv
 
 def main():
     # 记录开始时间
@@ -101,9 +26,7 @@ def main():
     # 解析命令行参数
     args = parse_args(config)
 
-    # 设置随机种子
-    torch.manual_seed(config.training["random_seed"])
-    np.random.seed(config.training["random_seed"])
+    set_seed()
 
     # 优化CUDA性能
     if torch.cuda.is_available():
@@ -152,15 +75,19 @@ def main():
 
     # 加载模型权重
     print(f"从 {args.pretrained_path} 加载模型权重...")
-    model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
+    model.load_state_dict(torch.load(args.pretrained_path, map_location=device), strict = False)
 
     # 显示模型信息
     total_params = sum(p.numel() for p in model.parameters())
     print(f"模型总参数量: {total_params:,}")
 
+    fn = build_loss(args.loss1, "CrossEntropyLoss", config)
+    loss = fn if fn else build_loss(True, "FocalLoss", config)
+    loss2 = build_loss(args.loss2, "BoundaryFlowLoss", config)
+    loss3 = args.loss3
     # 测试模型
-    results = test_model(model, test_loader, device, None)
-
+    loss, metrics, similarity_loss = one_epoch_train(model, test_loader, None, loss, device, train=False, loss2=loss2, loss3=loss3)
+    test_metrics = calculate_metrics(metrics, config.data['num_classes'], threshold_method='0.5')
     existing_dirs = [d for d in os.listdir(args.output_dir) if
                      d.startswith('test_') and os.path.isdir(os.path.join(args.output_dir, d))]
     next_num = 1
@@ -174,58 +101,54 @@ def main():
 
     # 打印测试结果
     print("\n测试结果:")
-    print(f"准确率 (Accuracy): {results['accuracy']:.4f}")
-    print(f"F1 分数 (macro): {results['f1']:.4f}")
-    print(f"AUC: {results['auc']:.4f}")
-    print("\n每类准确率:")
-    for cls, acc in results['per_class_accuracy'].items():
-        class_name = args.class_names[cls] if args.class_names and cls < len(args.class_names) else f"类别 {cls}"
-        print(f"{class_name}: {acc:.4f}")
+    # 打印进度和指标
+    print(
+        f' Test Loss: {loss:.4f}, ACC: {test_metrics["accuracy"]:.4f} AUC: {test_metrics["auc"]:.4f}')
+    print(
+        f'   test   F1: {test_metrics["f1"]:.4f}, 敏感性: {test_metrics["sensitivity"]:.4f}, 特异性: {test_metrics["specificity"]:.4f}')
+    print(f'阈值: {test_metrics["threshold"]:.4f}')
+    print(f'PPV: {test_metrics["ppv"]:.4f}, NPV: {test_metrics["npv"]:.4f}')
 
-    print("\n分类报告:")
-    print(results['classification_report'])
-
-    print("\n混淆矩阵:")
-    print(results['confusion_matrix'])
+    print("\n混淆矩阵:") # tn, fp, fn, tp
+    print(test_metrics['tn'], test_metrics['fp'], "\n", test_metrics['fn'], test_metrics['tp'])
 
     # 保存详细报告
     with open(os.path.join(output_dir, 'test_report.txt'), 'w', encoding='UTF-8') as f:
         f.write("测试结果:\n")
-        f.write(f"准确率 (Accuracy): {results['accuracy']:.4f}\n")
-        f.write(f"F1 分数 (macro): {results['f1']:.4f}\n")
-        f.write(f"AUC: {results['auc']:.4f}\n\n")
-        f.write("每类准确率:\n")
-        for cls, acc in results['per_class_accuracy'].items():
-            class_name = args.class_names[cls] if args.class_names and cls < len(args.class_names) else f"类别 {cls}"
-            f.write(f"{class_name}: {acc:.4f}\n")
-        f.write("\n分类报告:\n")
-        f.write(results['classification_report'])
+        f.write(f"准确率 (Accuracy): {test_metrics['accuracy']:.4f}\n")
+        f.write(f"F1:: {test_metrics['f1']:.4f}\n")
+        f.write(f"AUC: {test_metrics['auc']:.4f}\n\n")
+        f.write(f'敏感性: {test_metrics["sensitivity"]:.4f}, 特异性: {test_metrics["specificity"]:.4f}\n')
+        f.write(f'PPV: {test_metrics["ppv"]:.4f}, NPV: {test_metrics["npv"]:.4f}')
+
         f.write("\n混淆矩阵:\n")
-        f.write(str(results['confusion_matrix']))
+        f.write(f"[{test_metrics['tn']}, {test_metrics['fp']}]\n")
+        f.write(f"[{test_metrics['fn']}, {test_metrics['tp']}]\n")
 
-    from utils import plot_confusion_matrix, plot_prediction_confidence, plot_class_wise_metrics, plot_roc_curves
-    plot_confusion_matrix(results['true_labels'],
-                          results['predictions'],
-                          class_names=args.class_names,
-                          save_path=os.path.join(output_dir, 'confusion_matrix.png'))
+    save_metrics_to_csv(test_metrics, os.path.join(output_dir, 'test_metrics.csv'))
 
-    # 绘制预测置信度分布
-    plot_prediction_confidence(results['probabilities'],
-                               results['true_labels'],
-                               class_names=args.class_names,
-                               save_path=os.path.join(output_dir, 'prediction_confidence.png'))
+    plot_confusion_matrix(
+        metrics_dict=test_metrics,
+        save_path=os.path.join(output_dir, f'confusion_matrix.png')
+    )
+    plot_roc_curve(
+        metrics_dict_list=test_metrics,
+        save_path=os.path.join(output_dir, f'ROC_Curve.png')
+    )
+    plot_pr_curve(
+        metrics_dict_list=test_metrics,
+        save_path=os.path.join(output_dir, f'PR_Curve.png')
+    )
 
-    # 绘制每类性能
-    plot_class_wise_metrics(results,
-                            class_names=args.class_names,
-                            save_path=os.path.join(output_dir, 'class_performance.png'))
+    plot_decision_curve_analysis(
+        metrics_dict_list=test_metrics,
+        save_path=os.path.join(output_dir, f'Decision Curve Analysis.png')
+    )
+    create_combined_performance_figure(
+        metrics_dict_list=test_metrics,
+        save_path=os.path.join(output_dir, f'combined_performance.tiff')
+    )
 
-    # 绘制ROC曲线
-    plot_roc_curves(results['true_labels'],
-                    results['probabilities'],
-                    num_classes=config.data['num_classes'],
-                    class_names=args.class_names,
-                    save_path=os.path.join(output_dir, 'roc_curve.png'))
 
     # 打印总运行时间
     total_time = time.time() - start_time

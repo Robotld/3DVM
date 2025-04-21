@@ -1,9 +1,5 @@
-"""
-单次训练或验证
-"""
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, recall_score
 from tqdm import tqdm
 
 
@@ -15,23 +11,23 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
     # 设置模型状态
     model.train() if train else model.eval()
 
-    losses, all_preds, all_labels, all_probs = [], [], [], []
-    flow_losses = []
+    losses, all_labels, all_probs = [], [], []
+    flow_losses, similarity_losses = [], []  # 添加similarity_losses列表
+
     data_iter = tqdm(data_loader,
                      desc = "训练中" if train else "验证中",
-                     leave = False,  # 完成后删除进度条
-                     ncols = 100,  # 固定宽度
-                     mininterval = 0.01)  # 最小更新间隔时间
+                     leave = False,
+                     ncols = 100,
+                     mininterval = 0.01)
 
-    # 定义前向传播和损失计算函数
-    def forward_pass(inputs):
+    # 重新定义前向传播函数，将y作为参数传入
+    def forward_pass(inputs, targets):
         model_outputs, features, flow, similarity = model(inputs)
-        loss_all = loss1_weight * loss_fn(model_outputs, y)
-        # print(similarity_loss)
+        loss_all = loss1_weight * loss_fn(model_outputs, targets)
         info = {}
         if loss2:
-            flow_loss, info = loss2(features, y)
-            loss_all += loss2_weight*flow_loss
+            flow_loss, info = loss2(features, targets)
+            loss_all += loss2_weight * flow_loss
         if loss3:
             loss_all += similarity
         return model_outputs, loss_all, info, similarity
@@ -44,69 +40,58 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
             if train:
                 if use_amp:
                     with torch.amp.autocast(device_type = 'cuda', enabled = True):
-                        outputs, loss, flow_info, similarity_loss= forward_pass(x)
-                    # 缩放损失并反向传播
+                        outputs, loss, flow_info, similarity_loss = forward_pass(x, y)  # 修改调用方式
                     scaler.scale(loss).backward()
                     if max_grad_norm > 0:
                         scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-                    # 执行优化步骤
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    outputs, loss, flow_info, similarity_loss = forward_pass(x)
+                    outputs, loss, flow_info, similarity_loss = forward_pass(x, y)  # 修改调用方式
                     loss.backward()
                     if max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             else:
-                    outputs, loss, flow_info, similarity_loss = forward_pass(x)
+                outputs, loss, flow_info, similarity_loss = forward_pass(x, y)  # 修改调用方式
 
+            # 记录损失
+            losses.append(loss.item())
+            if loss3:
+                similarity_losses.append(similarity_loss.item() if isinstance(similarity_loss, torch.Tensor) else similarity_loss)
+            
             # 记录流场损失
-            if loss3 and 'total_flow_loss' in flow_info:
+            if loss2 and 'total_flow_loss' in flow_info:
                 flow_losses.append(flow_info['total_flow_loss'])
 
             # 收集结果
-            losses.append(loss.item())
             _, preds = outputs.max(1)
             probs = torch.nn.functional.softmax(outputs, dim=1)
-
-            all_preds.extend(preds.detach().cpu().numpy())
             all_labels.extend(y.detach().cpu().numpy())
             all_probs.extend(probs.detach().cpu().numpy())
+            
         # 关闭进度条
         data_iter.close()
+        
     # 转换为NumPy数组以计算指标
-    all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
 
     # 计算指标
     metrics = {
-        'accuracy': accuracy_score(all_labels, all_preds),
-        'f1': f1_score(all_labels, all_preds, average='macro'),
         'loss': np.mean(losses),
     }
 
     if flow_losses:
         metrics['flow_loss'] = np.mean(flow_losses)
 
-    # 计算AUC
-    num_classes = all_probs.shape[1]
-    if num_classes > 2:
-        metrics["auc"] = roc_auc_score(all_labels, all_probs, multi_class='ovr')
-    else:
-        metrics["auc"] = roc_auc_score(all_labels, all_probs[:, 1])
+    # 计算平均similarity_loss
+    avg_similarity_loss = np.mean(similarity_losses) if similarity_losses else 0.0
 
-    # 计算每类准确率
-    metrics['per_class_accuracy'] = {
-        cls: np.mean(all_preds[all_labels == cls] == cls)
-        for cls in np.unique(all_labels)
-    }
     # 保存预测结果
-    metrics['predictions'] = all_preds
     metrics['labels'] = all_labels
     metrics['probabilities'] = all_probs
 
-    return np.mean(losses), metrics, similarity_loss
+    return np.mean(losses), metrics, avg_similarity_loss  # 返回平均similarity_loss

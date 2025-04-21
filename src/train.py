@@ -1,18 +1,46 @@
-"""
-负责模型训练、计算指标，绘图、并保存最优模型
-"""
 import os
 import time
-import numpy as np
 import torch
 from torch import optim
 from tqdm import tqdm
 from models import WarmupScheduler
-
 from models import build_loss
 from one_epoch_train import one_epoch_train
-from utils import save_training_history, save_config
-from utils import plot_confusion_matrix, plot_roc_curves, plot_precision_recall_curve, progressive_unfreeze
+from utils import save_training_history, save_config, calculate_metrics
+from utils.Visualizer import *
+
+def save_best_model_if_improved(model, metric_value, metric_name, train_dir, epoch, flod):
+    """如果指标改进，保存最佳模型"""
+    best_model = {k: v.clone() for k, v in model.state_dict().items()}
+    print(f"\n保存新的最佳模型，{metric_name}: {metric_value:.4f}，在第{epoch + 1}轮")
+    torch.save(best_model, f'{train_dir}/best_{metric_name}_model_{flod}.pth')
+
+
+def save_metrics_to_csv(metrics_dict, file_path):
+    """
+    保存指标字典到CSV文件，只保存标量值
+
+    Args:
+        metrics_dict: 包含指标的字典
+        file_path: 保存CSV文件的路径
+    """
+    # 创建目录（如果不存在）
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+    # 筛选出标量值（非数组）
+    scalar_metrics = {}
+    for key, value in metrics_dict.items():
+        if not isinstance(value, (np.ndarray, list)) or np.isscalar(value):
+            scalar_metrics[key] = value
+
+    # 创建DataFrame
+    df = pd.DataFrame([scalar_metrics])
+
+    # 保存为CSV
+    df.to_csv(file_path, index=False, float_format='%.6f')
+    print(f"指标已保存至: {file_path}")
+
+    return scalar_metrics
 
 
 def train(model, train_loader, val_loader, config, fold, device, args,
@@ -20,10 +48,6 @@ def train(model, train_loader, val_loader, config, fold, device, args,
     """训练单个折的模型，添加学习率预热和梯度裁剪"""
     config_save_path = os.path.join(train_dir, 'config.yaml')
     save_config(config, config_save_path)
-
-    # 初始化指标记录列表
-    train_metrics_history = []
-    val_metrics_history = []
 
     # 初始化优化器
     optimizer = getattr(optim, config.optimizer["name"])(
@@ -73,24 +97,22 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             growth_interval = 2000  # 连续成功更新多少次后增长缩放因子
         )
         print("启用混合精度训练")
-
-    # 初始化最优指标
-    best_val_f1 = 0
-    best_val_auc = 0
-    best_auc_model = None
-    best_f1_model = None
-
-    # 保存用于可视化的数据
-    best_val_preds = None
-    best_val_labels = None
-    best_val_probs = None
-
+    
     # 缓存验证集，优化评估过程
     print("缓存验证数据到GPU内存以加速评估...")
     val_data_cached = []
     for x, y in tqdm(val_loader, desc="缓存验证数据"):
         val_data_cached.append((x.to(device), y.to(device)))
     val_loader_cached = val_data_cached
+
+    # 初始化指标记录列表
+    train_metrics_history = []
+    val_metrics_history = []
+    # 初始化最优指标
+    best_train_metrics = {"f1": 0.0, "auc": 0.0}
+    best_val_metrics = {"f1": 0.0, "auc": 0.0}
+    best_val_auc = 0.0
+    best_val_f1 = 0.0
 
     for epoch in range(args.epochs):
         start_time = time.time()
@@ -111,8 +133,6 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             use_amp=use_amp,
             max_grad_norm=max_grad_norm
         )
-        train_metrics_history.append(train_metrics)
-        print(similarity_loss)
         # 验证阶段
         val_loss, val_metrics, similarity_loss = one_epoch_train(
             model=model,
@@ -129,9 +149,6 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             use_amp=use_amp,
             max_grad_norm=max_grad_norm
         )
-        # print(similarity_loss)
-        val_metrics_history.append(val_metrics)
-
         # 计算当前学习率
         current_lr = optimizer.param_groups[0]['lr']
 
@@ -142,72 +159,78 @@ def train(model, train_loader, val_loader, config, fold, device, args,
         # 计算每轮训练时间
         epoch_time = time.time() - start_time
 
-        # 将每个类的准确率压缩到一行字符串输出
-        per_class_str = ", ".join([f"Class {cls}: {acc:.4f}" for cls, acc in val_metrics['per_class_accuracy'].items()])
+        train_metrics = calculate_metrics(train_metrics, config.data['num_classes'])
+        val_metrics = calculate_metrics(val_metrics, config.data['num_classes'])
 
-        # 保存基于F1分数的最佳模型
         if val_metrics['f1'] > best_val_f1:
             best_val_f1 = val_metrics['f1']
-            if best_f1 < best_val_f1:
-                best_f1_model = model.state_dict()
-            # 保存用于后续可视化的预测结果
-            best_val_preds = val_metrics.get('predictions', None)
-            best_val_labels = val_metrics.get('labels', None)
-            best_val_probs = val_metrics.get('probabilities', None)
+            best_val_metrics = val_metrics.copy()
+            save_best_model_if_improved(model, val_metrics['f1'], "f1", train_dir, epoch, fold)
 
-        # 保存基于AUC的最佳模型
+        if train_metrics['f1'] > best_train_metrics['f1']:
+            best_train_metrics = train_metrics.copy()
+
         if val_metrics['auc'] > best_val_auc:
             best_val_auc = val_metrics['auc']
-            if best_auc < best_val_auc:
-                best_auc_model = model.state_dict()
-            print(f"\n保存新的最佳模型(AUC)，AUC: {val_metrics['auc']:.4f}")
+            save_best_model_if_improved(model, val_metrics['auc'], "auc", train_dir, epoch, fold)  # 对于最佳AUC， 只存储模型，不存储相关指标。
+
+        train_metrics_history.append(train_metrics)
+        val_metrics_history.append(val_metrics)
 
         # 打印进度和指标
         print(
             f'\nFold {fold + 1}, Epoch {epoch + 1}/{config.training["num_epochs"]} - 耗时: {epoch_time:.2f}s, LR: {current_lr:.6f}')
         print(
-            f' Train Loss: {train_loss:.4f},'        f'    ACC: {train_metrics["accuracy"]:.4f}   AUC: {train_metrics["auc"]:.4f}')
+            f' Train Loss: {train_loss:.4f}, ACC: {train_metrics["accuracy"]:.4f} AUC: {train_metrics["auc"]:.4f}')
         print(
-            f'   Val Loss: {val_loss:.4f},'          f'    ACC: {val_metrics["accuracy"]:.4f}   AUC: {val_metrics["auc"]:.4f}\n'
-            f'   Val   F1: {val_metrics["f1"]:.4f}')
-        print(f'Best Val F1: {best_val_f1:.4f},    Best Val     AUC: {best_val_auc:.4f}')
-        print(f'Per Cls Acc: {per_class_str}\n')
+            f'   Val Loss: {val_loss:.4f}, ACC: {val_metrics["accuracy"]:.4f} AUC: {val_metrics["auc"]:.4f}')
+        print(
+            f'   Val   F1: {val_metrics["f1"]:.4f}, 敏感性: {val_metrics["sensitivity"]:.4f}, 特异性: {val_metrics["specificity"]:.4f}')
+        print(f'Best Val F1: {best_val_f1:.4f}, Best Val AUC: {best_val_auc:.4f}')
+        print(f'最佳阈值: {val_metrics["threshold"]:.4f}')
+        print(f'PPV: {val_metrics["ppv"]:.4f}, NPV: {val_metrics["npv"]:.4f}')
 
         # 更新学习率调度器
         scheduler.step()
 
-    # 保存训练历史记录
-    history_path = save_training_history(
-        train_dir,
-        fold,
-        train_metrics_history,
-        val_metrics_history
+    if best_val_metrics:
+        # F1最佳模型的图表
+        plot_confusion_matrix(
+            metrics_dict=best_val_metrics,
+            save_path=os.path.join(train_dir, f'f1_confusion_matrix_fold_{fold}.png')
+        )
+        plot_roc_curve(
+            metrics_dict_list=best_val_metrics,
+            save_path=os.path.join(train_dir, f'f1_ROC_Curve_fold_{fold}.png')
+        )
+        plot_pr_curve(
+            metrics_dict_list=best_val_metrics,
+            save_path=os.path.join(train_dir, f'f1_PR_Curve_fold_{fold}.png')
+        )
+
+        plot_decision_curve_analysis(
+            metrics_dict_list=best_val_metrics,
+            save_path=os.path.join(train_dir, f'f1_confusion_matrix_fold_{fold}.png')
+        )
+        create_combined_performance_figure(
+            metrics_dict_list=best_val_metrics,
+            save_path=os.path.join(train_dir, f'combined_performance.tiff_{fold}.png')
+        )
+
+        #保存F1最佳模型的指标到文件
+        best_metrics_file = os.path.join(train_dir, f'best_metrics')
+        os.makedirs(best_metrics_file, exist_ok=True)
+
+        save_metrics_to_csv(best_val_metrics, best_metrics_file + f'/best_val_metrics_fold_{fold}.csv')
+        save_metrics_to_csv(best_train_metrics, best_metrics_file + f'/best_train_metrics_fold_{fold}.csv')
+
+    plot_learning_curves(
+        train_metrics=train_metrics_history,
+        val_metrics=val_metrics_history,
+        save_path=os.path.join(train_dir, f'learning_curves_{fold}.png'),
     )
 
-    plot_confusion_matrix(
-        best_val_labels,
-        best_val_preds,
-        class_names=config.data['class_names'],  # 可以从args获取类别名称
-        save_path=os.path.join(train_dir, f'confusion_matrix_fold_{fold}.png')
-    )
-
-    plot_precision_recall_curve(
-        best_val_labels,
-        best_val_probs,
-        num_classes=config.data['num_classes'],
-        class_names=config.data['class_names'],
-        save_path=os.path.join(train_dir, f'precision_recall_{fold}.png')
-    )
-
-    # 绘制ROC曲线
-    plot_roc_curves(
-        best_val_labels,
-        best_val_probs,
-        num_classes=config.data['num_classes'],
-        save_path=os.path.join(train_dir, f'roc_curves_fold_{fold}.png')
-    )
-
-
+    # 保存历史训练记录
+    save_training_history(train_dir,fold,train_metrics_history, val_metrics_history)
     # 返回最佳指标
-    return best_val_f1, best_val_auc, best_f1_model, best_auc_model
-
+    return best_val_f1, best_val_auc

@@ -46,7 +46,7 @@ def create_transforms(config, args):
             RandRotate90d(keys=["image"], prob=0.3, spatial_axes=(0, 1)),
             RandAffined(
                 keys=["image"],
-                prob=0.1,
+                prob=0.5,
                 rotate_range=(np.pi / 20, np.pi / 20, np.pi / 20),
                 scale_range=(0.1, 0.1, 0.1),
                 translate_range=(3, 3, 3),
@@ -55,7 +55,7 @@ def create_transforms(config, args):
             ),
             # RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
             RandScaleIntensityd(keys=["image"], prob=0.3, factors=0.1),
-            # RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),
+            RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
         ]
 

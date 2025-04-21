@@ -17,25 +17,25 @@ model:
     depth: 6
     heads: 6
     mlp_dim: 256
-    mlp_num: 2
+    mlp_num: 1
     pool: max
-    cpt_num: 100
+    cpt_num: 2
 
 training:
   device: cuda
   random_seed: 42
   batch_size: 64
-  num_epochs: 30
+  num_epochs: 20
   num_workers: 4
   use_amp: false
   cache_dataset: true
   warmup_epochs: 3
   warmup_type: linear
   max_grad_norm: 1.0
-  crop_size: 48
+  crop_size: 42
   augment: true
-  pretrained_path: "E:\\workplace\\3D\\src\\train_output\\train_20250327_094426\\best_f1_model.pth"
-  frozen: True
+  pretrained_path: 'E:\workplace\3D\src\train_output\train_20250416_110325\best_auc_model_1.pth'
+  frozen: false
 losses:
   CrossEntropyLoss:
     enabled: false
@@ -61,13 +61,14 @@ losses:
 cross_validation:
   n_splits: 10
   shuffle: true
+
 optimizer:
   name: AdamW
   params:
-    lr: 0.00002
-    weight_decay: 0.002
+    lr: 0.00001
+    weight_decay: 0.05
 scheduler:
   name: CosineAnnealingLR
   params:
-    T_max: 30
+    T_max: 20
     eta_min: 5e-7

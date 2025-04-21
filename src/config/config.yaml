@@ -1,77 +1,72 @@
 data:
   num_classes: 2
   root_dirs:
-    - 'E:\data3D\nodule_patches96_1'
-    - 'E:\data3D\nodule_patches96_2'
-    - 'E:\data3D\nodule_patches96_3'
-    - 'E:\data3D\nodule_patches96_4'
-  output_dir: 'train_output'
-#  class_names: ['低分化', '中分化', '高分化', '微浸润', '原位癌']
-  class_names: ['Invasive', 'Non-invasive']
+    - "E:\\data3D\\nodule_patches96_1"
+    - "E:\\data3D\\nodule_patches96_2"
+    - "E:\\data3D\\nodule_patches96_3"
+    - "E:\\data3D\\nodule_patches96_4"
+  output_dir: train_output
+  class_names:
+    - Invasive
+    - Non-invasive
 model:
   params:
-    image_size: 96 # 96 * 96 * 96
+    image_size: 96
     patch_size: 6
     dim: 384
     depth: 6
     heads: 6
     mlp_dim: 256
-    mlp_num: 3
-    pool: 'max' # mean max all
-    cpt_num: 100
-
+    mlp_num: 1
+    pool: max
+    cpt_num: 5
 training:
-  device: "cuda"
+  device: cuda
   random_seed: 42
   batch_size: 32
-  num_epochs: 40
+  num_epochs: 20
   num_workers: 4
-  use_amp: True
-  cache_dataset: True
+  use_amp: false
+  cache_dataset: true
   warmup_epochs: 3
-  warmup_type: "linear"
+  warmup_type: linear
   max_grad_norm: 1.0
-  crop_size: 48
-  augment: True
-  pretrained_path: 'E:\ultralytics\rad_dino'
-  frozen: True
-
-
+  crop_size: 42
+  augment: true
+  pretrained_path: "E:\\ultralytics\\rad_dino"
+  frozen: false
 losses:
   CrossEntropyLoss:
-    enabled: False
+    enabled: true
     weight: 1.0
-    params: #{} # 如果 CrossEntropyLoss无需参数  但为了保持一致，以及不报错， 这里需要用空字典占位
+    params:
   FocalLoss:
-    enabled: True  # enabled false 表示 默认不启用
+    enabled: false
     weight: 1.0
     params:
       gamma: 2.0
       alpha: 0.25
   BoundaryFlowLoss:
-    enabled: True
-    weight: 1.0
+    enabled: false
+    weight: 0.3
     params:
       weight: 0.7
       margin: 0.3
   SimilarityLoss:
-    enabled: False
+    enabled: true
     params:
       low: 0.3
       high: 0.7
-
 cross_validation:
   n_splits: 5
   shuffle: true
-
 optimizer:
-  name: "AdamW"
+  name: AdamW
   params:
-    lr: 0.00002
+    lr: 0.00005
     weight_decay: 0.05
-
 scheduler:
-  name: "CosineAnnealingLR"
+  name: CosineAnnealingLR
   params:
     T_max: 20
     eta_min: 5e-6
