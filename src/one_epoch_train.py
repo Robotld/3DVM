@@ -29,7 +29,7 @@ def one_epoch_train(model, data_loader, optimizer, loss_fn, device,
             flow_loss, info = loss2(features, targets)
             loss_all += loss2_weight * flow_loss
         if loss3:
-            loss_all += similarity
+            loss_all += 0.5*similarity
         return model_outputs, loss_all, info, similarity
 
     # 训练或验证循环

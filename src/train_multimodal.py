@@ -13,11 +13,10 @@ from utils.Visualizer import *
 
 def save_best_model_if_improved(model, metric_value, metric_name, train_dir, epoch, fold):
     """如果指标改进，保存最佳模型"""
-    best_model = {k: v.clone() for k, v in model.state_dict().items()}
     print(f"\n保存新的最佳模型，{metric_name}: {metric_value:.4f}，在第{epoch + 1}轮")
     save_path = f'{train_dir}/best_{metric_name}_model_{fold}.pth'
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(best_model, save_path)
+    torch.save(model.state_dict(), save_path)
     # 返回保存路径，方便后续引用
     return save_path
 
@@ -33,20 +32,20 @@ def save_metrics_to_csv(metrics_dict, file_path):
     # 创建目录（如果不存在）
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-    # 筛选出标量值（非数组）
-    scalar_metrics = {}
-    for key, value in metrics_dict.items():
-        if not isinstance(value, (np.ndarray, list)) or np.isscalar(value):
-            scalar_metrics[key] = value
+    # # 筛选出标量值（非数组）
+    # scalar_metrics = {}
+    # for key, value in metrics_dict.items():
+    #     if not isinstance(value, (np.ndarray, list)) or np.isscalar(value):
+    #         scalar_metrics[key] = value
 
     # 创建DataFrame
-    df = pd.DataFrame([scalar_metrics])
+    df = pd.DataFrame([metrics_dict])
 
     # 保存为CSV
     df.to_csv(file_path, index=False, float_format='%.6f')
     print(f"指标已保存至: {file_path}")
 
-    return scalar_metrics
+    return metrics_dict
 
 
 def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device, train=True, scaler=None, use_amp=False, max_grad_norm=1.0):
@@ -81,7 +80,6 @@ def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device,
 
     # 收集所有预测和标签
     all_rec_probs = []
-    all_rec_preds = []
     all_rec_labels = []
     all_sub_preds = []
     all_sub_labels = []
@@ -91,10 +89,15 @@ def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device,
     for batch_data in loader:
         # 解包多模态数据
         images = batch_data["image"].to(device)
-        texts = {k: v.to(device) for k, v in batch_data["text"].items() if isinstance(v, torch.Tensor)}
+        text_inputs1 = {k: v.to(device) for k, v in batch_data["text_inputs1"].items()}
+        text_inputs2 = {k: v.to(device) for k, v in batch_data["text_inputs2"].items()}
         demographics = batch_data["demographic"].to(device)
         recurrence_labels = batch_data["recurrence_label"].to(device)
         subtype_labels = batch_data["subtype_label"].to(device)
+        keywords = batch_data["keywords"]  # 获取关键词列表
+
+        # for x, y in zip(ID, recurrence_labels):
+        #     print(x, y)
 
         # 训练模式
         if train:
@@ -104,11 +107,12 @@ def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device,
             if use_amp:
                 with torch.cuda.amp.autocast():
                     # 多模态前向传播
-                    recurrence_logits, subtype_logits, similarity_loss = model(images, texts, demographics)
+                    recurrence_logits, subtype_logits, similarity_loss, contrastive_loss, _ = model(images, text_inputs1, text_inputs2, demographics, keywords)
                     # 计算多任务损失
                     loss, rec_loss, sub_loss, sim_loss = criterion(
                         recurrence_logits, subtype_logits, recurrence_labels, subtype_labels, similarity_loss
                     )
+                    loss += contrastive_loss
 
                 # 反向传播与优化
                 scaler.scale(loss).backward()
@@ -119,10 +123,11 @@ def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device,
                 scaler.update()
             else:
                 # 标准训练流程
-                recurrence_logits, subtype_logits, similarity_loss = model(images, texts, demographics)
+                recurrence_logits, subtype_logits, similarity_loss, contrastive_loss, _ = model(images, text_inputs1, text_inputs2, demographics, keywords)
                 loss, rec_loss, sub_loss, sim_loss = criterion(
                     recurrence_logits, subtype_logits,  recurrence_labels, subtype_labels, similarity_loss
                 )
+                contrastive_loss += contrastive_loss
                 loss.backward()
                 if max_grad_norm > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -130,10 +135,11 @@ def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device,
         else:
             # 评估模式
             with torch.no_grad():
-                recurrence_logits, subtype_logits, similarity_loss = model(images, texts, demographics)
+                recurrence_logits, subtype_logits, similarity_loss, contrastive_loss, _ = model(images, text_inputs1, text_inputs2, demographics, keywords)
                 loss, rec_loss, sub_loss, sim_loss = criterion(
                     recurrence_logits, subtype_logits, recurrence_labels, subtype_labels, similarity_loss
                 )
+                loss += contrastive_loss
 
         # 累计损失
         total_loss += loss.item()
@@ -144,10 +150,8 @@ def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device,
         # 保存复发预测结果
         valid_rec_mask = (recurrence_labels != -1)
         if valid_rec_mask.sum() > 0:
-            rec_probs = torch.softmax(recurrence_logits[valid_rec_mask], dim=1)[:, 1].detach().cpu().numpy()
-            rec_preds = (rec_probs >= 0.5).astype(int)
+            rec_probs = torch.softmax(recurrence_logits[valid_rec_mask], dim=1).detach().cpu().numpy()
             all_rec_probs.extend(rec_probs)
-            all_rec_preds.extend(rec_preds)
             all_rec_labels.extend(recurrence_labels[valid_rec_mask].cpu().numpy())
 
         # 保存亚型分类结果
@@ -165,20 +169,13 @@ def one_epoch_multimodal_train(model, data_loader, optimizer, criterion, device,
 
     # 构建指标字典
     metrics_dict = {
-        'probabilities': np.array(all_rec_probs).reshape(-1, 1) if all_rec_probs else np.array([]),
-        'predictions': np.array(all_rec_preds) if all_rec_preds else np.array([]),
+        'probabilities': np.array(all_rec_probs),
+        'sub_probabilities': np.array(all_sub_preds),
         'labels': np.array(all_rec_labels) if all_rec_labels else np.array([]),
         'subtype_predictions': np.array(all_sub_preds) if all_sub_preds else np.array([]),
         'subtype_labels': np.array(all_sub_labels) if all_sub_labels else np.array([])
     }
 
-    # 修正概率维度，确保shape为[n_samples, 2]用于calculate_metrics函数
-    if all_rec_probs:
-        if metrics_dict['probabilities'].shape[1] == 1:
-            # 创建完整的概率矩阵 [negative_prob, positive_prob]
-            pos_probs = metrics_dict['probabilities']
-            neg_probs = 1 - pos_probs
-            metrics_dict['probabilities'] = np.hstack([neg_probs, pos_probs])
 
     # 收集所有损失值
     loss_dict = {
@@ -255,10 +252,14 @@ def train(model, train_loader, val_loader, config, fold, device, args,
                 # 将每个批次的数据移动到设备
                 cached_batch = {
                     "image": batch_data["image"].to(device),
-                    "text": {k: v.to(device) for k, v in batch_data["text"].items() if isinstance(v, torch.Tensor)},
+                    "text_inputs1": {k: v.to(device) for k, v in batch_data["text_inputs1"].items() if isinstance(v, torch.Tensor)},
+                    "text_inputs2": {k: v.to(device) for k, v in batch_data["text_inputs2"].items() if
+                                     isinstance(v, torch.Tensor)},
+                    "report1":batch_data["report1"],
                     "demographic": batch_data["demographic"].to(device),
                     "recurrence_label": batch_data["recurrence_label"].to(device),
-                    "subtype_label": batch_data["subtype_label"].to(device)
+                    "subtype_label": batch_data["subtype_label"].to(device),
+                    "keywords": batch_data["keywords"],
                 }
                 val_data_cached.append(cached_batch)
             print(f"已缓存全部 {val_size} 个验证样本")
@@ -282,7 +283,7 @@ def train(model, train_loader, val_loader, config, fold, device, args,
     best_auc_model_state = None
 
     # 提前停止的计数器
-    patience = getattr(args, 'patience', 10)
+    patience = getattr(args, 'patience', 5)
     patience_counter = 0
     last_best_epoch = 0
 
@@ -336,7 +337,7 @@ def train(model, train_loader, val_loader, config, fold, device, args,
             best_val_f1 = val_metrics['f1']
             best_val_metrics = val_metrics.copy()
             best_f1_model_state = model.state_dict().copy()
-            save_best_model_if_improved(model, val_metrics['f1'], "f1", train_dir, epoch, fold)
+            # save_best_model_if_improved(model, val_metrics['f1'], "f1", train_dir, epoch, fold)
             last_best_epoch = epoch
             patience_counter = 0
             improved = True
@@ -352,11 +353,12 @@ def train(model, train_loader, val_loader, config, fold, device, args,
         if val_metrics['auc'] > best_val_auc:
             best_val_auc = val_metrics['auc']
             best_auc_model_state = model.state_dict().copy()
-            save_best_model_if_improved(model, val_metrics['auc'], "auc", train_dir, epoch, fold)
+            plot_roc_curve(val_metrics, figsize=(6, 7), save_path=os.path.join(train_dir, f'ROC_Curve_fold_{fold}.png'))
+            # save_best_model_if_improved(model, val_metrics['auc'], "auc", train_dir, epoch, fold)
             if not improved:  # 如果F1没有提高但AUC提高了，也重置耐心计数器
                 patience_counter = 0
                 last_best_epoch = epoch
-
+            improved = True
         # 记录历史指标
         train_metrics_history.append(train_metrics)
         val_metrics_history.append(val_metrics)
@@ -392,35 +394,30 @@ def train(model, train_loader, val_loader, config, fold, device, args,
         scheduler.step()
 
         # # 检查提前停止
-        # if patience_counter >= patience:
-        #     print(f"\n连续 {patience} 个epoch未改善性能，提前停止训练")
-        #     print(f"最后的最佳epoch是第 {last_best_epoch + 1} 轮")
-        #     break
+        if patience_counter >= patience:
+            print(f"\n连续 {patience} 个epoch未改善性能，提前停止训练")
+            print(f"最后的最佳epoch是第 {last_best_epoch + 1} 轮")
+            break
 
     if best_val_metrics:
         # F1最佳模型的图表
         plot_confusion_matrix(
             metrics_dict=best_val_metrics,
-            save_path=os.path.join(train_dir, f'f1_confusion_matrix_fold_{fold}.png')
-        )
-        plot_roc_curve(
-            metrics_dict_list=best_val_metrics,
-            save_path=os.path.join(train_dir, f'f1_ROC_Curve_fold_{fold}.png')
+            save_path=os.path.join(train_dir, f'confusion_matrix_fold_{fold}.png')
         )
         plot_pr_curve(
             metrics_dict_list=best_val_metrics,
-            save_path=os.path.join(train_dir, f'f1_PR_Curve_fold_{fold}.png')
+            save_path=os.path.join(train_dir, f'PR_Curve_fold_{fold}.png')
         )
 
         plot_decision_curve_analysis(
             metrics_dict_list=best_val_metrics,
-            save_path=os.path.join(train_dir, f'f1_confusion_matrix_fold_{fold}.png')
+            save_path=os.path.join(train_dir, f'decision_curve_{fold}.png')
         )
-        create_combined_performance_figure(
+        plot_calibration_curves(
             metrics_dict_list=best_val_metrics,
-            save_path=os.path.join(train_dir, f'combined_performance.tiff_{fold}.png')
+            save_path=os.path.join(train_dir, f'calibration_{fold}.png')
         )
-
         # 保存F1最佳模型的指标到文件
         best_metrics_file = os.path.join(train_dir, f'best_metrics')
         os.makedirs(best_metrics_file, exist_ok=True)
@@ -433,7 +430,6 @@ def train(model, train_loader, val_loader, config, fold, device, args,
         val_metrics=val_metrics_history,
         save_path=os.path.join(train_dir, f'learning_curves_{fold}.png'),
     )
-
     # 保存历史训练记录
     save_training_history(train_dir, fold, train_metrics_history, val_metrics_history)
 

@@ -75,6 +75,8 @@ def calculate_metrics(metrics_dict, num_classes, threshold_method='f1'):
     auc_score = roc_auc_score(labels, probs) if len(np.unique(labels)) > 1 else 0
 
     metrics = {
+        'prob':probs,
+        'labels':labels,
         'threshold': threshold,
         'threshold_method': threshold_method,
         'accuracy': accuracy,

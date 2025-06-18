@@ -308,7 +308,7 @@ def build_loss(enabled, name, config):
 class MultitaskLoss(nn.Module):
     """多任务损失函数，处理复发预测和亚型分类"""
 
-    def __init__(self, recurrence_weight=1.0, subtype_weight=0.5, similarity_weight=0.1):
+    def __init__(self, recurrence_weight=1.0, subtype_weight=1.0, similarity_weight=0.5):
         """
         参数:
             recurrence_weight: 复发预测任务的权重
@@ -320,8 +320,10 @@ class MultitaskLoss(nn.Module):
         self.subtype_weight = subtype_weight
         self.similarity_weight = similarity_weight
 
-        self.recurrence_criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.3, 0.7], device='cuda'))  # 直接忽略-1标签
-        self.subtype_criterion = nn.CrossEntropyLoss()
+        self.recurrence_criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.2, 0.8], device='cuda'), ignore_index=-1)
+        # self.recurrence_criterion = FocalLoss()
+        self.subtype_criterion = nn.CrossEntropyLoss(ignore_index=-1)
+
 
     def forward(self, recurrence_logits, subtype_logits, recurrence_labels, subtype_labels, similarity_loss):
         """
@@ -338,6 +340,7 @@ class MultitaskLoss(nn.Module):
             recurrence_logits,
             recurrence_labels  # 确保标签是长整型
         )
+
         # 亚型分类损失
         subtype_loss = self.subtype_criterion(
             subtype_logits,
@@ -345,8 +348,7 @@ class MultitaskLoss(nn.Module):
         )
 
         # 总损失 = 复发预测权重 * 复发损失 + 亚型分类权重 * 亚型损失 + 相似度损失权重 * 相似度损失
-        total_loss = (self.recurrence_weight * recurrence_loss +
-                      self.subtype_weight * subtype_loss +
-                      self.similarity_weight * similarity_loss)
+        total_loss = self.recurrence_weight * recurrence_loss + self.subtype_weight * subtype_loss + similarity_loss
+
 
         return total_loss, recurrence_loss, subtype_loss, similarity_loss

@@ -15,8 +15,6 @@ from models import ViT3D
 from models import NoduleDataset
 from utils import update_config_from_args, parse_args, ConfigManager, set_seed, freeze_encoder_keep_prompts
 from train import train
-from utils.Visualizer import set_journal_style
-set_journal_style() # 设置图表格式
 
 
 def main():
@@ -112,8 +110,8 @@ def main():
             model.cls_token = torch.nn.Parameter(torch.randn(1, 1, model.embed_dim))
         model.to(device)
         # 加载模型后，冻结encoder部分，只保留CLS token和类原型向量可训练
-
-        # freeze_encoder_keep_prompts(model)
+        if config.training['frozen']:
+            freeze_encoder_keep_prompts(model)
 
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

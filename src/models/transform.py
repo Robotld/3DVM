@@ -3,7 +3,7 @@ from monai.transforms import (
     Compose, LoadImaged, Orientationd,
     CenterSpatialCropd, SpatialPadd, NormalizeIntensityd, ToTensord,
     RandRotate90d, RandAffined, RandGaussianSmoothd, RandScaleIntensityd,
-    RandShiftIntensityd, RandGaussianNoised
+    RandShiftIntensityd, RandGaussianNoised, RandFlipd, Rand3DElasticd, RandAdjustContrastd, RandCoarseDropoutd
 )
 
 def create_transforms(config, args):
@@ -21,7 +21,7 @@ def create_transforms(config, args):
             if isinstance(args.crop_size, int):
                 crop_size = (args.crop_size, args.crop_size, args.crop_size)
             else:
-                crop_size = (image_size, image_size, image_size)
+                crop_size = args.crop_size
         except:
             print(f"警告: 无法解析中心裁剪尺寸，使用默认值 ({image_size}x{image_size}x{image_size})")
             crop_size = (image_size, image_size, image_size)
@@ -42,28 +42,26 @@ def create_transforms(config, args):
     if args.augment:
         print("启用数据增强...")
         augment_transforms = [
-            # 2. 增强变换 - 应用在加载后但归一化前
-            RandRotate90d(keys=["image"], prob=0.3, spatial_axes=(0, 1)),
+            # RandFlipd(keys = ["image"], prob = 0.5, spatial_axis = [0]),
+            RandRotate90d(keys = ["image"], prob = 0.5, spatial_axes = [0, 1]),
             RandAffined(
-                keys=["image"],
-                prob=0.5,
-                rotate_range=(np.pi / 20, np.pi / 20, np.pi / 20),
-                scale_range=(0.1, 0.1, 0.1),
-                translate_range=(3, 3, 3),
-                mode="bilinear",
-                padding_mode="zeros"
+                keys = ["image"],
+                prob = 0.3,
+                rotate_range = (np.pi / 30, np.pi / 30, np.pi / 30),
+                scale_range = (0.05, 0.05, 0.05),
+                translate_range = (1, 1, 1),
+                mode = "bilinear",
+                padding_mode = "border",
             ),
-            # RandGaussianSmoothd(keys=["image"], prob=0.2, sigma_x=(0.5, 1.0)),
-            RandScaleIntensityd(keys=["image"], prob=0.3, factors=0.1),
-            RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.1),
-            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
+            # RandAdjustContrastd(keys = ["image"], prob = 0.3, gamma = (0.9, 1.1)),
+            # RandGaussianNoised(keys = ["image"], prob = 0.2, mean = 0.0, std = 0.03),
         ]
 
     # 3. 剩余的标准处理 - 所有数据都需要的步骤
     final_transforms = [
         # 强度归一化
         NormalizeIntensityd(keys=["image"]),
-        # 统一方向
+        # # 统一方向
         Orientationd(keys=["image"], axcodes="RAS"),
         # 中心裁剪
         CenterSpatialCropd(keys=["image"], roi_size=crop_size),

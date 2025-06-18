@@ -10,58 +10,60 @@ data:
   output_dir: 'mul_train_output'
   class_names: ['Invasive', 'Non-invasive']
   subtype_class_names: ['低分化', '中分化', '高分化', '原位癌', '微浸润']
-  csv_path: '../datasets/CTreport/协和预后随访复发与否.csv'
+  csv_path: 'E:\workplace\3D\datasets\structured_results_deepseek_补全CT报告.csv'
   max_text_length: 512
 
 model:
   params:
-    image_size: 96 # 96 * 96 * 96
-    patch_size: 6
-    dim: 384
-    depth: 6
-    heads: 6
-    mlp_dim: 256
-    mlp_num: 1
+    image_size: [96, 96, 96] # 96 * 96 * 96
+    patch_size: 8
+    dim: 768
+    depth: 12
+    heads: 12
+    mlp_dim: 128
+    mlp_num: 2
     pool: 'max' # mean max all
-    cpt_num: 50
+    cpt_num: 20
   bert_model_name: 'E:\workplace\3D\pred_model\bert_chinese'
-  text_feature_dim: 384
-  fusion_dim: 384
+  tokenizer_path: 'E:\workplace\3D\pred_model\bert_chinese'
+  text_feature_dim: 768
+  fusion_dim: 768
   dropout: 0.5
-  prompt_num: 5  # 提示向量数量
-  fusion_method: "concat"  # attention, concat, sum
+  prompt_num: 0  # 提示向量数量
+  fusion_method: "attention"  # attention, concat, sum
 
 training:
   device: "cuda"
   random_seed: 42
-  batch_size: 16  # 降低批次大小以适应多模态
+  batch_size: 32  # 降低批次大小以适应多模态
   num_epochs: 20
-  num_workers: 4
-  use_amp: false
+  num_workers: 2
+  use_amp: true
   cache_dataset: True
-  warmup_epochs: 3
+  warmup_epochs: 5
   warmup_type: "linear"
   max_grad_norm: 1.0
-  crop_size: 42
-  augment: True
-  pretrained_path: 'E:\workplace\3D\src\train_output\best\train_20250416_110325\best_f1_model_1.pth'
-  bert_pretrained_path: 'E:\workplace\3D\pred_model\bert' # 如果有预训练的BERT模型，可以在这里指定
-  frozen: false  # 冻结图像和文本编码器主干
+  crop_size: [64, 64, 32]
+  augment: true
+  pretrained_path: 'E:\workplace\3D\src\train_output\train_20250617_210403\best_auc_model_1.pth'
+  bert_pretrained_path: 'E:\workplace\3D\pred_model\bert_chinese' # 如果有预训练的BERT模型，可以在这里指定
+  frozen1: true # 冻结图像编码器
+  frozen2: true # 冻结文本编码器
   frozen_prompt: false  # 不冻结提示向量
 
 losses:
   CrossEntropyLoss:
-    enabled: false
+    enabled: true
     weight: 1.0
     params: {0.3, 0.7}
   FocalLoss:
-    enabled: True
+    enabled: false
     weight: 1.0
     params:
       gamma: 2.0
       alpha: 0.25
   BoundaryFlowLoss:
-    enabled: false
+    enabled: true
     weight: 1.0
     params:
       weight: 0.5
@@ -74,17 +76,24 @@ losses:
   MultitaskLoss:
     enabled: true
     recurrence_weight: 1.0  # 复发预测任务权重
-    subtype_weight: 1.0     # 亚型分类任务权重
+    subtype_weight: 0.5   # 亚型分类任务权重
+
 
 cross_validation:
-  n_splits: 5
+  n_splits: 10
   shuffle: true
+  negative_ratio: 8
+  pos_ratio: 0.2
+  minority_multiplier: 6
+  use_clustering: false  # 设置为true启用聚类交叉验证
+  clustering_method: "kmeans"  # 聚类方法
+  feature_extraction_batch_size: 32  # 特征提取时的批次大小
 
 optimizer:
   name: "AdamW"
   params:
-    lr: 0.00002
-    weight_decay: 0.05
+    lr: 0.00001
+    weight_decay: 0.0001
 
 scheduler:
   name: "CosineAnnealingLR"
